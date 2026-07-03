@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "api_base_url": "https://ip-api.com",
+  "cache_ttl_minutes": 10,
+  "skip_paths": [
+    "/public/*"
+  ]
+}

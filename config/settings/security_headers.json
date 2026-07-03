@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "frame_deny": true,
+  "content_security_policy": "frame-ancestors 'none'",
+  "content_type_nosniff": true,
+  "browser_xss_filter": true,
+  "referrer_policy": "strict-origin-when-cross-origin",
+  "hsts": {
+    "seconds": 0,
+    "include_subdomains": true,
+    "preload": false
+  }
+}

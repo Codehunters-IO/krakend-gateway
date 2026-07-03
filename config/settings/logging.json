@@ -1,0 +1,7 @@
+{
+  "level": "INFO",
+  "prefix": "[CODEHUNTERS-GW]",
+  "stdout": true,
+  "syslog": false,
+  "format": "logstash"
+}

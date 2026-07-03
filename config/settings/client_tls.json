@@ -1,0 +1,4 @@
+{
+  "@comment": "Skip SSL verification when connecting to backends",
+  "allow_insecure_connections": false
+}

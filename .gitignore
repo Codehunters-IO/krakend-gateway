@@ -1,0 +1,36 @@
+# Generated KrakenD config
+krakend.json
+/tmp/
+
+# Compiled plugins (architecture-specific, built via make plugin-build)
+plugins/build/*.so
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.cursor/
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# TLS certs (mount target only — never commit real certs/keys)
+certs/*
+!certs/.gitkeep
+certs/*.key
+certs/*.crt
+
+# Compiled plugin binaries (core dumps / build artifacts)
+plugins/*/core
+plugins/build/
+*.so
+
+# Claude Code context
+.claude/

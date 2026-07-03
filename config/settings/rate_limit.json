@@ -1,0 +1,7 @@
+{
+  "service_max_rate": 500,
+  "service_client_max_rate": 50,
+  "endpoint_max_rate": 100,
+  "endpoint_client_max_rate": 20,
+  "strategy": "ip"
+}

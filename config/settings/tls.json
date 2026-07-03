@@ -1,0 +1,14 @@
+{
+  "disabled": false,
+  "keys": [
+    {
+      "public_key": "/etc/krakend/certs/server.crt",
+      "private_key": "/etc/krakend/certs/server.key"
+    }
+  ],
+  "min_version": "TLS12",
+  "max_version": "TLS13",
+  "enable_mtls": false,
+  "disable_system_ca_pool": true,
+  "ca_certs": []
+}

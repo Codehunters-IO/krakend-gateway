@@ -1,0 +1,30 @@
+name: Develop Pipeline
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+  packages: write
+  id-token: write
+
+jobs:
+  pipeline:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    uses: CODEHUNTERS/ci-templates/.github/workflows/krakend-main-pipeline.yml@main
+    with:
+      run_commit_lint: false
+      run_build: true
+      run_test: true
+      run_artifact: true
+      run_deploy: true
+      deploy_target: 'ec2-vpn'
+      environment: 'develop'
+      run_cleanup: false
+      run_release: true
+      release_target_branch: 'main'
+    secrets: inherit

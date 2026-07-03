@@ -1,0 +1,77 @@
+# Release KrakenD to PRODUCTION (manual, button-triggered via Actions "Run workflow").
+# validate version -> deploy to prod (Environment reviewers approve) -> tag vX.Y.Z + Release.
+# Tag pushed by GITHUB_TOKEN -> ruleset-tags must bypass GitHub Actions (see ruleset).
+name: Release to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to cut and deploy (format vX.Y.Z, e.g. v1.4.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check version format and uniqueness
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref_name }}
+        run: |
+          if [ "$REF" != "main" ]; then
+            echo "::error::Release must be dispatched from 'main' (got '$REF')."; exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must match vX.Y.Z (got '$VERSION')"; exit 1
+          fi
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag ${VERSION} already exists (releases are immutable)"; exit 1
+          fi
+
+  deploy:
+    name: Deploy to prod
+    needs: validate
+    uses: CODEHUNTERS/ci-templates/.github/workflows/krakend-main-pipeline.yml@main
+    with:
+      run_commit_lint: false
+      run_build: true
+      run_test: false
+      run_artifact: true
+      image_tag: ${{ inputs.version }}
+      run_deploy: true
+      deploy_target: 'ec2-vpn'
+      environment: 'prod'
+    secrets: inherit
+
+  tag:
+    name: Tag + GitHub Release
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Create tag and release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            git tag "${VERSION}"
+            git push origin "${VERSION}"
+          fi
+          gh release view "${VERSION}" >/dev/null 2>&1 \
+            || gh release create "${VERSION}" --title "${VERSION}" --generate-notes

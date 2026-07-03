@@ -1,0 +1,26 @@
+services:
+  krakend:
+    image: krakend:2.13.4
+    ports:
+      - "8000:8080"
+      - "8001:8090"
+      - "8443:8443"
+    volumes:
+      - ./config:/etc/krakend
+      - ./plugins/build:/opt/krakend/plugins
+      - ./certs:/etc/krakend/certs:ro
+    environment:
+      - FC_ENABLE=1
+      - FC_SETTINGS=/etc/krakend/settings
+      - FC_OUT=/tmp/krakend.json
+      - AUTH_HOST=${AUTH_HOST:-http://codehunters-ms-auth:8080}
+      - FILE_SHARE_HOST=${FILE_SHARE_HOST:-http://codehunters-ms-file-share:8080}
+      - MANAGMENT_HOST=${MANAGMENT_HOST:-http://codehunters-ms-managment:8080}
+      - NOTIFICATIONS_HOST=${NOTIFICATIONS_HOST:-http://codehunters-ms-notifications:8080}
+      - PAYMENT_HOST=${PAYMENT_HOST:-http://codehunters-ms-payment:8080}
+      - RAFFLES_HOST=${RAFFLES_HOST:-http://codehunters-ms-raffles:8080}
+    labels:
+      observability.service: "codehunters-gw-krakend"
+      observability.environment: "develop"
+      observability.domain: "gateway"
+    command: ["run", "-d", "-c", "/etc/krakend/krakend.tmpl"]
