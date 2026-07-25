@@ -33,6 +33,9 @@
   "extra_config": {
     "plugin/http-server": {
       "name": [
+        {{- if .gateway_timeout.enabled }}
+        "krakend-gateway-timeout"{{ if or .accept_language.enabled .trace_context.enabled .ip_resolver.enabled .jwt.enabled }},{{ end }}
+        {{- end }}
         {{- if .accept_language.enabled }}
         "krakend-accept-language"{{ if or .trace_context.enabled .ip_resolver.enabled .jwt.enabled }},{{ end }}
         {{- end }}
@@ -46,7 +49,14 @@
         "krakend-jwt-headers"
         {{- end }}
       ]
-      {{- if or .accept_language.enabled .ip_resolver.enabled .jwt.enabled }},{{ end }}
+      {{- if or .gateway_timeout.enabled .accept_language.enabled .ip_resolver.enabled .jwt.enabled }},{{ end }}
+      {{- if .gateway_timeout.enabled }}
+      "krakend-gateway-timeout": {
+        "trigger_status": {{ .gateway_timeout.trigger_status }},
+        "timeout_status": {{ .gateway_timeout.timeout_status }},
+        "min_elapsed": "{{ env "GATEWAY_TIMEOUT_MIN_ELAPSED" | default .gateway_timeout.min_elapsed }}"
+      }{{ if or .accept_language.enabled .ip_resolver.enabled .jwt.enabled }},{{ end }}
+      {{- end }}
       {{- if .accept_language.enabled }}
       "krakend-accept-language": {
         "default_value": "{{ .accept_language.default_value }}"
@@ -66,8 +76,16 @@
         "cache_ttl_minutes": {{ .jwt.cache_ttl_minutes }},
         "claims_to_headers": {{ marshal .jwt.claims_to_headers }},
         "skip_paths": {{ marshal .jwt.skip_paths }},
+        "required_claims": {{ marshal .jwt.required_claims }},
+        "roles_claim": "{{ .jwt.roles_claim }}",
+        "required_roles": {{ marshal .jwt.required_roles }},
         "add_ip_header": {{ .jwt.add_ip_header }},
-        "ip_header_name": "{{ .jwt.ip_header_name }}"
+        "ip_header_name": "{{ .jwt.ip_header_name }}",
+        "introspection_enabled": {{ .jwt.introspection_enabled }},
+        "introspection_url": "{{ .jwt.introspection_url }}",
+        "introspection_client_id": "{{ .jwt.introspection_client_id }}",
+        "introspection_client_secret": "{{ env "JWT_INTROSPECTION_CLIENT_SECRET" | default "" }}",
+        "introspection_cache_ttl_seconds": {{ .jwt.introspection_cache_ttl_seconds }}
       }
       {{- end }}
     },

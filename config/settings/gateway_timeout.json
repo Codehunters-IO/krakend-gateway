@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "trigger_status": 500,
+  "timeout_status": 504,
+  "min_elapsed": "4900ms"
+}
