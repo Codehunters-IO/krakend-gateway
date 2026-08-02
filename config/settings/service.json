@@ -1,6 +1,6 @@
 {
-  "name": "Codehunters API Gateway - Development",
-  "port": 8080,
+  "name": "ForgeOS API Gateway - Development",
+  "port": 8090,
   "timeout": "3000ms",
   "cache_ttl": "300s"
 }
