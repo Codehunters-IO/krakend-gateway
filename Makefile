@@ -8,7 +8,7 @@ BUILDER_IMAGE = krakend/builder:2.13.4
 LOCAL_BUILDER_IMAGE = codehunters-plugin-builder:local
 KRAKEND_IMAGE = krakend:2.13.4
 
-PLUGINS = jwt-headers ip-resolver trace-context accept-language
+PLUGINS = jwt-headers ip-resolver trace-context accept-language gateway-timeout
 
 CERTS_DIR = certs
 TLS_CN ?= localhost

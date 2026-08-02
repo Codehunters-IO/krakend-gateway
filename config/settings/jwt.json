@@ -47,5 +47,12 @@
     "/codehunters-ms-managment/api/v1/public/raffles"
   ],
   "add_ip_header": true,
-  "ip_header_name": "x-ip"
+  "ip_header_name": "x-ip",
+  "required_claims": ["sub"],
+  "roles_claim": "realm_access.roles",
+  "required_roles": [],
+  "introspection_enabled": false,
+  "introspection_url": "",
+  "introspection_client_id": "",
+  "introspection_cache_ttl_seconds": 30
 }
