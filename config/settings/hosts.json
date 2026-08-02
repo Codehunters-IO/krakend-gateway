@@ -1,8 +1,3 @@
 {
-  "auth": "http://codehunters-ms-auth:8080",
-  "file_share": "http://codehunters-ms-file-share:8080",
-  "managment": "http://codehunters-ms-managment:8080",
-  "notifications": "http://codehunters-ms-notifications:8080",
-  "payment": "http://codehunters-ms-payment:8080",
-  "raffles": "http://codehunters-ms-raffles:8080"
+  "example": "http://example-service:8080"
 }

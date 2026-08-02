@@ -5,7 +5,7 @@ OUTPUT_FILE = krakend.json
 
 PLUGIN_BUILD_DIR = plugins/build
 BUILDER_IMAGE = krakend/builder:2.13.4
-LOCAL_BUILDER_IMAGE = codehunters-plugin-builder:local
+LOCAL_BUILDER_IMAGE = krakend-plugin-builder:local
 KRAKEND_IMAGE = krakend:2.13.4
 
 PLUGINS = jwt-headers ip-resolver trace-context accept-language gateway-timeout
@@ -63,7 +63,7 @@ plugin-check: ## Verify plugins load correctly
 dev: plugin-build up ## Build plugins and start locally (full local dev)
 
 build: ## Build Docker image (production)
-	docker build -t codehunters-gw-krakend .
+	docker build -t krakend-gateway .
 
 up: ## Start with docker-compose
 	docker compose up -d

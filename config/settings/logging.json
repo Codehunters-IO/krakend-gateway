@@ -1,6 +1,6 @@
 {
   "level": "INFO",
-  "prefix": "[CODEHUNTERS-GW]",
+  "prefix": "[KRAKEND-GW]",
   "stdout": true,
   "syslog": false,
   "format": "logstash"

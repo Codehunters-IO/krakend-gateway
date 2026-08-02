@@ -13,14 +13,12 @@ services:
       - FC_ENABLE=1
       - FC_SETTINGS=/etc/krakend/settings
       - FC_OUT=/tmp/krakend.json
-      - AUTH_HOST=${AUTH_HOST:-http://codehunters-ms-auth:8080}
-      - FILE_SHARE_HOST=${FILE_SHARE_HOST:-http://codehunters-ms-file-share:8080}
-      - MANAGMENT_HOST=${MANAGMENT_HOST:-http://codehunters-ms-managment:8080}
-      - NOTIFICATIONS_HOST=${NOTIFICATIONS_HOST:-http://codehunters-ms-notifications:8080}
-      - PAYMENT_HOST=${PAYMENT_HOST:-http://codehunters-ms-payment:8080}
-      - RAFFLES_HOST=${RAFFLES_HOST:-http://codehunters-ms-raffles:8080}
+      - EXAMPLE_HOST=${EXAMPLE_HOST:-http://example-service:8080}
+      # Keycloak (override para apuntar a tu realm; default en jwt.json)
+      - KEYCLOAK_JWKS_URL=${KEYCLOAK_JWKS_URL:-}
+      - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-}
     labels:
-      observability.service: "codehunters-gw-krakend"
+      observability.service: "krakend-gateway"
       observability.environment: "develop"
       observability.domain: "gateway"
     command: ["run", "-d", "-c", "/etc/krakend/krakend.tmpl"]

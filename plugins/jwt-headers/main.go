@@ -41,7 +41,7 @@ type claimMapping struct {
 }
 
 // roleRule requires the caller to hold at least one of Roles to reach a path.
-// Path segments support a single-segment wildcard: "/raffles/*/tickets/reserve".
+// Path segments support a single-segment wildcard: "/api/v1/*/items/reserve".
 type roleRule struct {
 	Path  string   `json:"path"`
 	Roles []string `json:"roles"`

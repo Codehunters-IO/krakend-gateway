@@ -11,7 +11,7 @@ informed: [equipo frontend]
 ## Context and Problem Statement
 
 El gateway (KrakenD 2.13.x) termina TLS y enruta todo el tráfico público hacia los
-microservicios Codehunters. Hoy no emite cabeceras de seguridad HTTP, dejando a los clientes
+microservicios backend. Hoy no emite cabeceras de seguridad HTTP, dejando a los clientes
 expuestos a tres vectores en el borde:
 
 - **Clickjacking** — respuestas embebibles en `<iframe>` de terceros.

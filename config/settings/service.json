@@ -1,5 +1,5 @@
 {
-  "name": "Codehunters API Gateway - Development",
+  "name": "KrakenD API Gateway - Development",
   "port": 8080,
   "timeout": "3000ms",
   "cache_ttl": "300s"
