@@ -1,0 +1,159 @@
+# Source of truth for the gateway's endpoints.
+#
+# `make gen` expands this into config/settings/endpoints.json (committed), which
+# krakend.tmpl ranges over at render time. Endpoints with `auth: public` are the
+# ones added to the JWT plugin's skip_paths — never edit that list by hand.
+#
+# Anything under x-* is anchor scaffolding for this file only; the generator
+# ignores unknown top-level keys.
+
+x-header-sets:
+  # Public routes: no identity headers reach the backend.
+  anonymous: &anonymous
+    - Accept
+    - Content-Type
+    - Traceparent
+    - Tracestate
+  # Protected routes: identity claims injected by the jwt-headers plugin.
+  identity: &identity
+    - Accept
+    - Accept-Language
+    - Content-Type
+    - Authorization
+    - x-user-id
+    - x-user-roles
+    - x-username
+    - x-org-slug
+    - X-Organization-Id
+    - x-ip
+    - Idempotency-Key
+    - Traceparent
+    - Tracestate
+    - X-Traceparent
+
+backends:
+  forgeos:
+    host_default: http://host.docker.internal:8080
+    host_env: FORGEOS_HOST
+
+defaults:
+  output_encoding: no-op
+  encoding: no-op
+  timeout: null
+
+endpoints:
+  - path: /api/ping
+    method: GET
+    backend: forgeos
+    auth: public
+    input_headers: *anonymous
+
+  - path: /api/organizations
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/organizations
+    method: POST
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/organizations/{orgId}/members
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects
+    method: POST
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/hub
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/summary
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/description
+    method: PUT
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/stories
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/stories
+    method: POST
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/board
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/refinement/turns
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/projects/{projectId}/refinement/turns
+    method: POST
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/stories/{id}
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: *identity
+
+  # SSE streams — no-op passthrough with a 3600s timeout so the progress stream
+  # survives the 3s service timeout; host sanitize is off to keep the raw URL.
+  - path: /api/projects/{projectId}/refinement/stream
+    method: GET
+    backend: forgeos
+    auth: protected
+    timeout: 3600s
+    disable_host_sanitize: true
+    input_headers: *identity
+
+  - path: /api/stories/{id}/refinement/stream
+    method: GET
+    backend: forgeos
+    auth: protected
+    timeout: 3600s
+    disable_host_sanitize: true
+    input_headers: *identity
+
+  - path: /api/agent-runs/{id}/stream
+    method: GET
+    backend: forgeos
+    auth: protected
+    timeout: 3600s
+    disable_host_sanitize: true
+    input_headers: *identity
