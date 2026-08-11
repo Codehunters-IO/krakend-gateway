@@ -1,0 +1,19 @@
+backends:
+  forgeos:
+    host_default: http://host.docker.internal:8080
+    host_env: FORGEOS_HOST
+defaults:
+  output_encoding: no-op
+  encoding: no-op
+  timeout: null
+endpoints:
+  - path: /api/ping
+    method: GET
+    backend: forgeos
+    auth: public
+    input_headers: [Accept, Traceparent]
+  - path: /api/projects
+    method: GET
+    backend: forgeos
+    auth: protected
+    input_headers: [Accept, Authorization, Traceparent]
