@@ -23,19 +23,20 @@ type RateLimit struct {
 // Endpoint is one route. Fields with json:"-" are consumed during normalize
 // and not emitted; the rest are emitted into endpoints.json in this order.
 type Endpoint struct {
-	Path              string     `yaml:"path" json:"path"`
-	Method            string     `yaml:"method" json:"method"`
-	Backend           string     `yaml:"backend" json:"-"`
-	Auth              string     `yaml:"auth" json:"auth"`
-	URLPattern        string     `yaml:"url_pattern" json:"url_pattern"`
-	OutputEncoding    string     `yaml:"output_encoding" json:"output_encoding"`
-	Encoding          string     `yaml:"encoding" json:"encoding"`
-	HostEnv           string     `yaml:"-" json:"host_env"`
-	HostDefault       string     `yaml:"-" json:"host_default"`
-	InputHeaders      []string   `yaml:"input_headers" json:"input_headers"`
-	InputQueryStrings []string   `yaml:"input_query_strings" json:"input_query_strings"`
-	Timeout           string     `yaml:"timeout" json:"timeout"`
-	RateLimit         *RateLimit `yaml:"rate_limit" json:"rate_limit"`
+	Path                string     `yaml:"path" json:"path"`
+	Method              string     `yaml:"method" json:"method"`
+	Backend             string     `yaml:"backend" json:"-"`
+	Auth                string     `yaml:"auth" json:"auth"`
+	URLPattern          string     `yaml:"url_pattern" json:"url_pattern"`
+	OutputEncoding      string     `yaml:"output_encoding" json:"output_encoding"`
+	Encoding            string     `yaml:"encoding" json:"encoding"`
+	HostEnv             string     `yaml:"-" json:"host_env"`
+	HostDefault         string     `yaml:"-" json:"host_default"`
+	DisableHostSanitize bool       `yaml:"disable_host_sanitize" json:"disable_host_sanitize"`
+	InputHeaders        []string   `yaml:"input_headers" json:"input_headers"`
+	InputQueryStrings   []string   `yaml:"input_query_strings" json:"input_query_strings"`
+	Timeout             string     `yaml:"timeout" json:"timeout"`
+	RateLimit           *RateLimit `yaml:"rate_limit" json:"rate_limit"`
 }
 
 // Spec is the full endpoints.yaml document.

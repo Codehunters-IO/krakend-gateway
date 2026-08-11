@@ -16,11 +16,15 @@ func TestParseSampleYAML(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &spec); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(spec.Endpoints) != 2 {
-		t.Fatalf("endpoints: got %d want 2", len(spec.Endpoints))
+	if len(spec.Endpoints) != 3 {
+		t.Fatalf("endpoints: got %d want 3", len(spec.Endpoints))
 	}
 	if spec.Endpoints[0].Path != "/api/ping" {
 		t.Errorf("path: got %q", spec.Endpoints[0].Path)
+	}
+	if !spec.Endpoints[2].DisableHostSanitize || spec.Endpoints[2].Timeout != "3600s" {
+		t.Errorf("sse endpoint: sanitize=%v timeout=%q",
+			spec.Endpoints[2].DisableHostSanitize, spec.Endpoints[2].Timeout)
 	}
 	b, ok := spec.Backends["forgeos"]
 	if !ok || b.HostEnv != "FORGEOS_HOST" {

@@ -17,3 +17,10 @@ endpoints:
     backend: forgeos
     auth: protected
     input_headers: [Accept, Authorization, Traceparent]
+  - path: /api/stream
+    method: GET
+    backend: forgeos
+    auth: protected
+    timeout: 3600s
+    disable_host_sanitize: true
+    input_headers: [Accept, Authorization, Traceparent]
