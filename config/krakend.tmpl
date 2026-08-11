@@ -81,7 +81,10 @@
         "issuer": "{{ .jwt.issuer }}",
         "cache_ttl_minutes": {{ .jwt.cache_ttl_minutes }},
         "claims_to_headers": {{ marshal .jwt.claims_to_headers }},
-        "skip_paths": {{ marshal .jwt.skip_paths }},
+        "skip_paths": [
+          {{- range $i, $p := .jwt.skip_paths }}{{ if $i }},{{ end }}"{{ $p }}"{{ end }}
+          {{- range .endpoints.endpoints }}{{ if eq .auth "public" }},"{{ .path }}"{{ end }}{{ end }}
+        ],
         "required_claims": {{ marshal .jwt.required_claims }},
         "roles_claim": "{{ .jwt.roles_claim }}",
         "required_roles": {{ marshal .jwt.required_roles }},
@@ -142,189 +145,34 @@
     {{- end }}
   },
   "endpoints": [
+{{- range $i, $e := .endpoints.endpoints }}
+  {{- if $i }},{{ end }}
     {
-      "endpoint": "/api/ping",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept", "Content-Type", "Traceparent", "Tracestate" ],
+      "endpoint": "{{ $e.path }}",
+      "method": "{{ $e.method }}",
+      "output_encoding": "{{ $e.output_encoding }}",
+      "input_headers": {{ marshal $e.input_headers }},
+      {{- if $e.input_query_strings }}
+      "input_query_strings": {{ marshal $e.input_query_strings }},
+      {{- end }}
+      {{- if $e.timeout }}
+      "timeout": "{{ $e.timeout }}",
+      {{- end }}
+      {{- if $e.rate_limit }}
+      "extra_config": { "qos/ratelimit/router": {{ marshal $e.rate_limit }} },
+      {{- end }}
       "backend": [
-        { "url_pattern": "/api/ping", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    },
-    {
-      "endpoint": "/api/organizations",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/organizations", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/organizations",
-      "method": "POST",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/organizations", "method": "POST", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/organizations/{orgId}/members",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/organizations/{orgId}/members", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
+        {
+          "url_pattern": "{{ $e.url_pattern }}",
+          "method": "{{ $e.method }}",
+          "encoding": "{{ $e.encoding }}",
+          {{- if $e.disable_host_sanitize }}
+          "disable_host_sanitize": true,
+          {{- end }}
+          "host": ["{{ env $e.host_env | default $e.host_default }}"]
+        }
       ]
     }
-,
-    {
-      "endpoint": "/api/projects",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects",
-      "method": "POST",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects", "method": "POST", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/hub",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/hub", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/summary",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/summary", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/description",
-      "method": "PUT",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/description", "method": "PUT", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/stories",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/stories", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/stories",
-      "method": "POST",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/stories", "method": "POST", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/board",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/board", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/refinement/turns",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/refinement/turns", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/refinement/turns",
-      "method": "POST",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/refinement/turns", "method": "POST", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/stories/{id}",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/stories/{id}", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"] }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/projects/{projectId}/refinement/stream",
-      "method": "GET",
-      "// comment": "SSE stream — no-op passthrough, timeout 3600s so the progress stream survives the 3s service timeout.",
-      "output_encoding": "no-op",
-      "timeout": "3600s",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/projects/{projectId}/refinement/stream", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"], "disable_host_sanitize": true }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/stories/{id}/refinement/stream",
-      "method": "GET",
-      "// comment": "SSE stream — no-op passthrough, timeout 3600s so the progress stream survives the 3s service timeout.",
-      "output_encoding": "no-op",
-      "timeout": "3600s",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/stories/{id}/refinement/stream", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"], "disable_host_sanitize": true }
-      ]
-    }
-,
-    {
-      "endpoint": "/api/agent-runs/{id}/stream",
-      "method": "GET",
-      "// comment": "SSE stream — no-op passthrough, timeout 3600s so the progress stream survives the 3s service timeout.",
-      "output_encoding": "no-op",
-      "timeout": "3600s",
-      "input_headers": [ "Accept","Accept-Language","Content-Type","Authorization","x-user-id","x-user-roles","x-username","x-org-slug","X-Organization-Id","x-ip","Idempotency-Key","Traceparent","Tracestate","X-Traceparent" ],
-      "backend": [
-        { "url_pattern": "/api/agent-runs/{id}/stream", "method": "GET", "encoding": "no-op", "host": ["{{ env "FORGEOS_HOST" | default .hosts.forgeos }}"], "disable_host_sanitize": true }
-      ]
-    }
+{{- end }}
   ]
 }

@@ -1,58 +1,60 @@
-[
-  {
-    "path": "/api/ping",
-    "method": "GET",
-    "auth": "public",
-    "url_pattern": "/api/ping",
-    "output_encoding": "no-op",
-    "encoding": "no-op",
-    "host_env": "FORGEOS_HOST",
-    "host_default": "http://host.docker.internal:8080",
-    "disable_host_sanitize": false,
-    "input_headers": [
-      "Accept",
-      "Traceparent"
-    ],
-    "input_query_strings": [],
-    "timeout": "",
-    "rate_limit": null
-  },
-  {
-    "path": "/api/projects",
-    "method": "GET",
-    "auth": "protected",
-    "url_pattern": "/api/projects",
-    "output_encoding": "no-op",
-    "encoding": "no-op",
-    "host_env": "FORGEOS_HOST",
-    "host_default": "http://host.docker.internal:8080",
-    "disable_host_sanitize": false,
-    "input_headers": [
-      "Accept",
-      "Authorization",
-      "Traceparent"
-    ],
-    "input_query_strings": [],
-    "timeout": "",
-    "rate_limit": null
-  },
-  {
-    "path": "/api/stream",
-    "method": "GET",
-    "auth": "protected",
-    "url_pattern": "/api/stream",
-    "output_encoding": "no-op",
-    "encoding": "no-op",
-    "host_env": "FORGEOS_HOST",
-    "host_default": "http://host.docker.internal:8080",
-    "disable_host_sanitize": true,
-    "input_headers": [
-      "Accept",
-      "Authorization",
-      "Traceparent"
-    ],
-    "input_query_strings": [],
-    "timeout": "3600s",
-    "rate_limit": null
-  }
-]
+{
+  "endpoints": [
+    {
+      "path": "/api/ping",
+      "method": "GET",
+      "auth": "public",
+      "url_pattern": "/api/ping",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "FORGEOS_HOST",
+      "host_default": "http://host.docker.internal:8080",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "",
+      "rate_limit": null
+    },
+    {
+      "path": "/api/projects",
+      "method": "GET",
+      "auth": "protected",
+      "url_pattern": "/api/projects",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "FORGEOS_HOST",
+      "host_default": "http://host.docker.internal:8080",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Authorization",
+        "Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "",
+      "rate_limit": null
+    },
+    {
+      "path": "/api/stream",
+      "method": "GET",
+      "auth": "protected",
+      "url_pattern": "/api/stream",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "FORGEOS_HOST",
+      "host_default": "http://host.docker.internal:8080",
+      "disable_host_sanitize": true,
+      "input_headers": [
+        "Accept",
+        "Authorization",
+        "Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "3600s",
+      "rate_limit": null
+    }
+  ]
+}

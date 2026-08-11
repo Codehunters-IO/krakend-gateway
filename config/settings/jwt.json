@@ -11,8 +11,7 @@
     { "claim": "slug", "header": "x-org-slug" }
   ],
   "skip_paths": [
-    "/public/*",
-    "/api/ping"
+    "/public/*"
   ],
   "add_ip_header": true,
   "ip_header_name": "x-ip",

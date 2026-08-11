@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 )
@@ -33,17 +34,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("wrote %s (%d endpoints)\n", out, countTop(j))
+	fmt.Printf("wrote %s (%d endpoints)\n", out, countEndpoints(j))
 }
 
-// countTop counts top-level array elements by counting the object-opening
-// braces at indentation depth 2 ("  {"). Good enough for a status line.
-func countTop(j []byte) int {
-	n, s := 0, string(j)
-	for i := 0; i+3 <= len(s); i++ {
-		if s[i] == '\n' && s[i+1] == ' ' && s[i+2] == ' ' && s[i+3] == '{' {
-			n++
-		}
+// countEndpoints reports how many endpoints the generated document holds.
+func countEndpoints(j []byte) int {
+	var doc struct {
+		Endpoints []json.RawMessage `json:"endpoints"`
 	}
-	return n
+	if err := json.Unmarshal(j, &doc); err != nil {
+		return 0
+	}
+	return len(doc.Endpoints)
 }
