@@ -6,9 +6,13 @@ API Gateway para la plataforma Codehunters construido con [KrakenD](https://www.
 
 ```
 codehunters-gw-krakend/
+├── endpoints.yaml                    # Fuente de verdad de los endpoints (editar aqui)
+├── cmd/
+│   └── gen/                          # Generador Go: endpoints.yaml -> endpoints.json
 ├── config/
 │   ├── krakend.tmpl                  # Template principal (Flexible Configuration)
 │   └── settings/
+│       ├── endpoints.json            # GENERADO — no editar a mano (make gen)
 │       ├── service.json              # Nombre, puerto, timeouts
 │       ├── hosts.json                # Hosts de los servicios backend
 │       ├── cors.json                 # Configuracion CORS
@@ -137,9 +141,110 @@ make build
 | `make build` | Construye imagen Docker de produccion |
 | `make plugin-build` | Compila todos los plugins con Docker |
 | `make plugin-check` | Verifica que plugins + config son validos |
-| `make check` | Valida la configuracion KrakenD |
+| `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
+| `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
+| `make check` | `gen-check` + valida la configuracion KrakenD |
 | `make generate` | Genera el `krakend.json` final desde templates |
 | `make clean` | Elimina artefactos generados |
+
+## Endpoints (generador)
+
+Los endpoints **no se escriben a mano** en `krakend.tmpl`. La fuente de verdad es
+`endpoints.yaml`; un generador Go (`cmd/gen`) lo expande a
+`config/settings/endpoints.json`, que el template recorre con `range` al renderizar.
+
+```
+endpoints.yaml  ──make gen──▶  config/settings/endpoints.json  ──FC range──▶  krakend.tmpl
+     (editas)                       (generado, commiteado)                      (render)
+```
+
+`endpoints.json` **se commitea**: el gateway arranca sin toolchain de Go. Editarlo a
+mano no sirve — el proximo `make gen` lo sobrescribe y `make check` falla por drift.
+
+### Anadir o cambiar un endpoint
+
+1. Editar `endpoints.yaml`.
+2. `make gen` — regenera `endpoints.json` (falla con los errores de validacion si el YAML es invalido).
+3. `make check` — valida drift + schema KrakenD.
+4. Commitear `endpoints.yaml` **y** `config/settings/endpoints.json` juntos.
+
+### Esquema de `endpoints.yaml`
+
+```yaml
+backends:                              # hosts logicos, referenciados por clave
+  forgeos:
+    host_default: http://host.docker.internal:8080
+    host_env: FORGEOS_HOST             # envvar que lo sobreescribe en runtime
+
+defaults:                              # aplicados a endpoints que omitan el campo
+  output_encoding: no-op
+  encoding: no-op
+  timeout: null
+
+endpoints:
+  - path: /api/projects/{projectId}/stories   # ruta expuesta por el gateway
+    method: GET                               # GET|POST|PUT|PATCH|DELETE
+    backend: forgeos                          # clave declarada en backends
+    auth: protected                           # public => entra en skip_paths del JWT
+    input_headers: [Accept, Authorization]    # explicito, sin herencia
+```
+
+| Campo | Obligatorio | Descripcion |
+|-------|-------------|-------------|
+| `path` | si | Ruta expuesta. Debe empezar por `/` |
+| `method` | si | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
+| `backend` | si | Clave de `backends` |
+| `auth` | si | `public` o `protected`. `public` anade el path a `skip_paths` del plugin JWT |
+| `input_headers` | si | Headers que llegan al backend. Explicito por endpoint (auditabilidad) |
+| `url_pattern` | no | Ruta en el backend. Default: igual que `path` |
+| `input_query_strings` | no | Query params reenviados |
+| `timeout` | no | Override del timeout de servicio (ej. `3600s` para SSE) |
+| `disable_host_sanitize` | no | `true` para streams SSE |
+| `output_encoding` / `encoding` | no | Default: los de `defaults` |
+| `rate_limit` | no | `max_rate`, `client_max_rate`, `strategy` por endpoint |
+
+Los header sets repetidos se factorizan con anchors YAML (`&identity` / `*identity`).
+Cualquier clave top-level `x-*` se ignora — es scaffolding del propio fichero.
+
+### Validacion
+
+`make gen` aborta y reporta **todos** los errores de una pasada: path sin `/` inicial,
+metodo desconocido, backend no declarado, `input_headers` vacio, `auth` invalido y
+endpoints duplicados (`method` + `path`).
+
+Tres capas de validacion en total:
+
+1. **Generador** — reglas de esquema (arriba).
+2. **`make gen-check`** — drift entre YAML y JSON commiteado. Tambien corre en CI (job `endpoints-drift`).
+3. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+
+### Rutas publicas y `skip_paths`
+
+`skip_paths` del plugin JWT se compone en render-time como:
+
+```
+skip_paths estaticos (jwt.json)  +  todo endpoint con auth: public
+```
+
+Por eso `jwt.json` solo lleva entradas no-endpoint (globs como `/public/*`). Abrir una
+ruta se hace **solo** poniendo `auth: public` en `endpoints.yaml` — nunca editando
+`skip_paths` a mano. Asi ninguna ruta queda sin auth sin que se vea en el YAML.
+
+### Uso directo del CLI
+
+`make gen` es lo normal. Invocacion directa (el modulo vive en `cmd/gen`, sin go.mod raiz):
+
+```bash
+cd cmd/gen && go run . <entrada.yaml> <salida.json>
+cd cmd/gen && go test ./...        # tests del generador
+```
+
+Los argumentos son obligatorios en la practica: los defaults del binario
+(`endpoints.yaml` → `config/settings/endpoints.json`) se resuelven contra el
+directorio actual, y el modulo obliga a ejecutar desde `cmd/gen`. Por eso el target
+`gen` del Makefile pasa rutas absolutas (`$(CURDIR)/...`).
+
+Diseno y decisiones: [`docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md`](docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md).
 
 ## Plugins
 
@@ -461,7 +566,10 @@ Configurado en `config/settings/rate_limit.json`:
 
 ### JWT / Keycloak
 
-Configurado en `config/settings/jwt.json`. Los paths en `skip_paths` no requieren autenticacion. Soporta:
+Configurado en `config/settings/jwt.json`. Los paths en `skip_paths` no requieren
+autenticacion; la lista final se compone en render-time con los estaticos de este
+fichero mas los endpoints marcados `auth: public` en `endpoints.yaml` (ver
+**Endpoints (generador)**). Soporta:
 
 - **Match exacto**: `/codehunters-ms-auth/api/v1/login`
 - **Wildcard prefijo**: `/public/*` (cubre cualquier ruta bajo `/public/`)
@@ -486,10 +594,10 @@ Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `
 
 ### Anadir nueva ruta publica
 
-1. Definir endpoint en `krakend.tmpl` con `endpoint: "/public/v1/..."` y `backend.url_pattern` apuntando al servicio real.
-2. Quitar de `input_headers` los relacionados con auth: `Authorization`, `x-user-id`, `x-org-id`, `x-user-roles`, `x-username`.
-3. No tocar `skip_paths` — `/public/*` ya cubre la ruta.
-4. `make check` para validar config, `make plugin-build` si es la primera vez.
+1. Anadir el endpoint en `endpoints.yaml` con `path: /public/v1/...`, `auth: public` y `url_pattern` apuntando a la ruta real del backend.
+2. Quitar de `input_headers` los relacionados con auth: `Authorization`, `x-user-id`, `x-org-slug`, `X-Organization-Id`, `x-user-roles`, `x-username`.
+3. No tocar `skip_paths` en `jwt.json` — `auth: public` lo deriva, y `/public/*` ya cubre el prefijo.
+4. `make gen` y luego `make check` para validar; `make plugin-build` si es la primera vez.
 
 ### Endpoints publicos actuales
 
