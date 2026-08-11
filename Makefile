@@ -14,12 +14,22 @@ CERTS_DIR = certs
 TLS_CN ?= localhost
 TLS_DAYS ?= 365
 
-.PHONY: help check run build generate clean plugin-build plugin-check up down logs dev builder tls-dev-cert tls-clean
+GEN_DIR = cmd/gen
+ENDPOINTS_SPEC = endpoints.yaml
+ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
+
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-check: ## Validate KrakenD configuration
+gen: ## Regenerate $(ENDPOINTS_JSON) from $(ENDPOINTS_SPEC)
+	@cd $(GEN_DIR) && go run . "$(CURDIR)/$(ENDPOINTS_SPEC)" "$(CURDIR)/$(ENDPOINTS_JSON)"
+
+gen-check: gen ## Fail if endpoints.json is out of sync with endpoints.yaml
+	@git diff --exit-code $(ENDPOINTS_JSON)
+
+check: gen-check ## Validate KrakenD configuration (regen + drift + schema)
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
 	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
