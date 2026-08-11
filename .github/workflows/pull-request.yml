@@ -20,3 +20,20 @@ jobs:
       run_build: true
       run_test: true
     secrets: inherit
+
+  endpoints-drift:
+    name: Endpoints config in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/gen/go.mod
+
+      - name: Test the generator
+        run: cd cmd/gen && go test ./...
+
+      - name: Verify endpoints.json is in sync with endpoints.yaml
+        run: make gen-check
