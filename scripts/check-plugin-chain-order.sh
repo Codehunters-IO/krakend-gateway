@@ -17,7 +17,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS_DIR="$ROOT_DIR/config/settings"
 TEMPLATE="$ROOT_DIR/config/krakend.tmpl"
-OUT_FILE="$(mktemp -t krakend-chain-order.XXXXXX.json)"
+# Rendered next to the repo rather than in the system temp dir: CI runs
+# krakend from its own container image (the official binary is musl-linked
+# and will not run on the glibc runner), and only the workspace is mounted
+# into it at an identical path. A $TMPDIR render would be invisible to the
+# container on one side or the other. Removed by the trap below either way.
+OUT_FILE="$(mktemp "$ROOT_DIR/.krakend-chain-order.XXXXXX.json")"
 trap 'rm -f "$OUT_FILE"' EXIT
 
 if ! command -v jq >/dev/null 2>&1; then

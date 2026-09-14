@@ -21,8 +21,8 @@ jobs:
       run_test: true
     secrets: inherit
 
-  endpoints-drift:
-    name: Endpoints config in sync
+  gateway-config:
+    name: Gateway config check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +35,37 @@ jobs:
       - name: Test the generator
         run: cd cmd/gen && go test ./...
 
-      - name: Verify endpoints.json is in sync with endpoints.yaml
-        run: make gen-check
+      - name: Install jq
+        run: |
+          command -v jq >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
+          jq --version
+
+      # KrakenD's official binary is CGO-linked against musl (it has to be, to
+      # load Go plugins), so it cannot just be copied out of the image onto a
+      # glibc runner. Shim it to its own image instead, mounting the workspace
+      # at an identical path so every path the Makefile and
+      # scripts/check-plugin-chain-order.sh use resolves the same inside and
+      # out. Pinned to the tag the Dockerfile ships, so CI checks the config
+      # against the runtime that will actually parse it.
+      - name: Install the krakend binary
+        run: |
+          docker pull -q krakend:2.13.4
+          sudo tee /usr/local/bin/krakend >/dev/null <<'SHIM'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec docker run --rm \
+            -e FC_ENABLE -e FC_SETTINGS -e FC_OUT \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$PWD" \
+            krakend:2.13.4 "$@"
+          SHIM
+          sudo chmod +x /usr/local/bin/krakend
+          krakend version
+
+      # make check is the whole gate: endpoints.json drift against
+      # endpoints.yaml, the KrakenD schema, and the plugin/http-server chain
+      # order. Running gen-check alone left the chain-order guard — the one
+      # property that already broke silently — running nowhere but a
+      # developer's laptop.
+      - name: Validate the gateway configuration
+        run: make check
