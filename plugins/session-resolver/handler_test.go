@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -119,19 +120,6 @@ func TestHandlerFailureModes(t *testing.T) {
 			build: func() (*http.Request, string) {
 				r := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 				r.AddCookie(&http.Cookie{Name: "sid", Value: "L123456789012345678901234567890123456789012"})
-				return r, addr
-			},
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			// Drives actionUnauthorized (decide.go's sidFormat rejection) —
-			// every other case in this table uses a well-formed 43-character
-			// sid, so without this one the malformed-cookie branch of the
-			// handler's switch never runs at all.
-			name: "malformed session cookie is 401 without touching valkey",
-			build: func() (*http.Request, string) {
-				r := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
-				r.AddCookie(&http.Cookie{Name: "sid", Value: "too-short"})
 				return r, addr
 			},
 			wantStatus: http.StatusUnauthorized,
@@ -468,6 +456,34 @@ func TestActionResponseDeniesUnknownAction(t *testing.T) {
 	}
 }
 
+// TestRefreshErrorClassNeverReflectsMessageText pins refreshErrorClass's
+// actual protective property directly, on its own terms: it is
+// message-text-blind. Reverting refreshErrorClass alone (main.go's log
+// line back to err.Error()) while stripURL stays fixed does NOT reproduce
+// a leak against TestHandlerRefreshFailureNeverLogsTheSid — stripURL
+// already removes the sid from the error value at its source, so there is
+// currently no live sid-bearing error left on this path for
+// refreshErrorClass to catch. That makes refreshErrorClass's value
+// undemonstrable by reverting-and-rerunning the handler test alone: it
+// exists as defense against a FUTURE error producer on this path that
+// forgets to sanitize, not against a leak reproducible today. This test
+// pins that property independently: an error whose message carries a
+// sid-shaped value nothing in refresh.go actually produces must still
+// never have that value surface in refreshErrorClass's output.
+func TestRefreshErrorClassNeverReflectsMessageText(t *testing.T) {
+	sid := "Y823456789012345678901234567890123456789012"
+	fake := fmt.Errorf("dial tcp: connecting to .../sessions/%s/refresh: connection refused", sid)
+
+	class := refreshErrorClass(fake)
+
+	if strings.Contains(class, sid) {
+		t.Fatalf("refreshErrorClass reflected the input error's message text into its output: %q", class)
+	}
+	if class != "refresh_failed" {
+		t.Errorf("class = %q, want refresh_failed for an error matching none of the known sentinels", class)
+	}
+}
+
 // TestHandlerRefreshErrorMapping exercises the refresh()-error-to-status
 // mapping (main.go's `if err != nil` block after refresh.refresh) through
 // the full handler, not just refresh_test.go's direct calls to refresh().
@@ -575,4 +591,44 @@ func TestHandlerPassThroughCookieHandling(t *testing.T) {
 			t.Error("Cookie was stripped on a skip path — auth-bff reads this cookie directly on /auth/session and /auth/logout")
 		}
 	})
+}
+
+// TestHandlerMalformedSidDeniesWithoutTouchingValkey pins that a malformed
+// session cookie is rejected by decide()'s actionUnauthorized branch itself
+// — not by falling through to actionResolve and a Valkey lookup that
+// happens to miss. Status code and Called cannot tell these apart: delete
+// sidFormat from decide.go entirely and "too-short" falls through to
+// actionResolve, hits load() against a real, reachable Valkey, misses, and
+// denies 401 with Called==false — an externally identical result to the
+// actionUnauthorized path. The outcome string in the "request denied" log
+// line is where the two diverge: "malformed_session" (actionUnauthorized,
+// never touches the store) versus "miss" (actionResolve, data == nil).
+func TestHandlerMalformedSidDeniesWithoutTouchingValkey(t *testing.T) {
+	addr := startValkey(t)
+
+	var buf bytes.Buffer
+	prev := logger
+	logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})).With("plugin", pluginName)
+	t.Cleanup(func() { logger = prev })
+
+	handler, captured := buildHandler(t, handlerConfig(addr))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.AddCookie(&http.Cookie{Name: "sid", Value: "too-short"})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if captured.Called {
+		t.Error("backend was called for a malformed session cookie")
+	}
+	if !strings.Contains(buf.String(), `"outcome":"malformed_session"`) {
+		t.Errorf("expected outcome=malformed_session (actionUnauthorized) in the logs, got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), `"outcome":"miss"`) {
+		t.Errorf("outcome=miss means this fell through to actionResolve and a real Valkey lookup instead of being rejected by actionUnauthorized:\n%s", buf.String())
+	}
 }

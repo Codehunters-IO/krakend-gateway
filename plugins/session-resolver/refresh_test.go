@@ -556,6 +556,39 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 	})
 }
 
+// TestCallAuthBffNeverLeaksSidViaURLError pins stripURL's contract directly
+// against callAuthBff, independent of main.go and of any logger: the sid is
+// substituted into the request URL callAuthBff builds
+// (.../sessions/{sid}/refresh), and http.Client.Do wraps every transport
+// failure (connection refused here) in a *url.Error whose Error() renders
+// as `Post "<url>": <cause>` — the sid-bearing URL, verbatim. This is the
+// end that actually removes the sid FROM THE ERROR VALUE; as long as it
+// holds, any future caller that logs or wraps this error is safe by
+// construction, regardless of what main.go does with it.
+func TestCallAuthBffNeverLeaksSidViaURLError(t *testing.T) {
+	sid := "X723456789012345678901234567890123456789012"
+
+	s, err := newStore(&pluginConfig{ValkeyAddr: "127.0.0.1:1", KeyPrefix: "v1:", ValkeyTimeoutMs: 100})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	cfg := &pluginConfig{
+		RefreshURL:            "http://127.0.0.1:1/internal/sessions/{sid}/refresh",
+		RefreshTimeoutMs:      200,
+		RefreshLockTTLSeconds: 5,
+		InternalSecret:        "s3cret",
+	}
+	r := newRefresher(cfg, s)
+
+	_, err = r.callAuthBff(context.Background(), sid)
+	if err == nil {
+		t.Fatal("expected an error calling an unreachable auth-bff")
+	}
+	if strings.Contains(err.Error(), sid) {
+		t.Errorf("callAuthBff's error leaks the sid: %v", err)
+	}
+}
+
 func refreshConfig(valkeyAddr, serverURL string) *pluginConfig {
 	return &pluginConfig{
 		ValkeyAddr:            valkeyAddr,
