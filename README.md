@@ -215,8 +215,14 @@ endpoints duplicados (`method` + `path`).
 Tres capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
-2. **`make gen-check`** — drift entre YAML y JSON commiteado. Tambien corre en CI (job `endpoints-drift`).
+2. **`make gen-check`** — drift entre YAML y JSON commiteado.
 3. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+4. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+
+Las cuatro corren con `make check`, que es lo que ejecuta CI en cada PR (job
+`Gateway config check`). Ojo con la direccion de la dependencia en el
+`Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
+por si solo **no** corre las capas 3 y 4.
 
 ### Rutas publicas y `skip_paths`
 
@@ -229,6 +235,12 @@ skip_paths estaticos (jwt.json)  +  todo endpoint con auth: public
 Por eso `jwt.json` solo lleva entradas no-endpoint (globs como `/public/*`). Abrir una
 ruta se hace **solo** poniendo `auth: public` en `endpoints.yaml` — nunca editando
 `skip_paths` a mano. Asi ninguna ruta queda sin auth sin que se vea en el YAML.
+
+El plugin `session-resolver` deriva su `skip_paths` de la misma fuente
+(`session.json` + los endpoints `auth: public`). Antes era una lista escrita a
+mano: coincidian, y nada detectaba la deriva — la primera ruta publica fuera de
+`/auth/` habria devuelto `401` a un navegador con cookie sin que ningun test se
+pusiera en rojo.
 
 ### Uso directo del CLI
 
