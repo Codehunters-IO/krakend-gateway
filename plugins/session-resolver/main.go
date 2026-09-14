@@ -176,7 +176,11 @@ func (r registerer) registerHandlers(
 		data, err := sessions.load(ctx, sid)
 		if err != nil {
 			// Valkey unreachable: fail closed. Never forward without identity.
-			logger.Error("session store unavailable", "path", req.URL.Path, "err", err.Error())
+			// storeErrorClass, not err.Error(): this was the last raw error
+			// text on the request path, and a driver or server message here
+			// can quote the command that failed — whose arguments include
+			// the session key.
+			logger.Error("session store unavailable", "path", req.URL.Path, "class", storeErrorClass(err))
 			deny(w, req, http.StatusServiceUnavailable, "store_error")
 			return
 		}
@@ -205,7 +209,16 @@ func (r registerer) registerHandlers(
 		}
 
 		token := data.AccessToken
+		outcome := "hit"
 		if now >= data.Exp-threshold {
+			// "refreshed" means this request entered the refresh path, which
+			// is the fact worth alerting on: it is where auth-bff, the lock
+			// and the wait loop all live. refresh() may still return a token
+			// a concurrent caller had already obtained without calling
+			// auth-bff itself, and that is deliberately not distinguished
+			// here — the refresh event belongs to the session, not to
+			// whichever request happened to win the lock.
+			outcome = "refreshed"
 			// observedExp MUST be the Exp this handler just loaded above, not
 			// AbsExp and not time.Now().Unix() — refresh() uses it as the
 			// external, shared baseline every concurrent caller for this same
@@ -228,12 +241,25 @@ func (r registerer) registerHandlers(
 			}
 		}
 
-		sessions.renewIdle(ctx, sid)
+		if err := sessions.renewIdle(ctx, sid); err != nil {
+			// Warn, not error, and never fatal: the session is valid and the
+			// request proceeds. But a renewal that keeps failing expires
+			// live sessions on their original idle TTL — users logged out
+			// mid-session — and this is the only place that is visible.
+			logger.Warn("session idle ttl renewal failed",
+				"path", req.URL.Path, "sub", data.Subject, "class", storeErrorClass(err))
+		}
 
 		// Set, not Add: overwrite anything the caller smuggled in.
 		req.Header.Set("Authorization", "Bearer "+token)
 		// The session identifier is a credential; backends must never receive it.
 		req.Header.Del("Cookie")
+
+		// The success half of the outcome vocabulary the deny path already
+		// emits. Same fields, same discipline: sub and path, never the sid,
+		// the cookie or the token. Without it a deploy could resolve zero
+		// sessions and look exactly like a deploy resolving all of them.
+		logger.Info("session resolved", "path", req.URL.Path, "sub", data.Subject, "outcome", outcome)
 
 		h.ServeHTTP(w, req)
 	}), nil

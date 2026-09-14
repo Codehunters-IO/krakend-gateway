@@ -632,3 +632,75 @@ func TestHandlerMalformedSidDeniesWithoutTouchingValkey(t *testing.T) {
 		t.Errorf("outcome=miss means this fell through to actionResolve and a real Valkey lookup instead of being rejected by actionUnauthorized:\n%s", buf.String())
 	}
 }
+
+// TestHandlerLogsSuccessOutcome pins the success half of the outcome
+// vocabulary. The deny paths were the only ones that logged, which made a
+// gateway resolving zero sessions indistinguishable from one resolving all of
+// them: both are silent. It also re-asserts the redaction rule on the lines
+// that carry a live session — no sid, no cookie, no token.
+func TestHandlerLogsSuccessOutcome(t *testing.T) {
+	addr := startValkey(t)
+	now := time.Now().Unix()
+
+	authBff := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"refreshed.jwt"}`))
+	}))
+	t.Cleanup(authBff.Close)
+
+	for _, tc := range []struct {
+		name        string
+		sid         string
+		exp         int64
+		wantOutcome string
+		wantToken   string
+	}{
+		// Far from the refresh threshold: resolved straight from the store.
+		{"hit", "A123456789012345678901234567890123456789012", now + 9000, "hit", "the.jwt"},
+		// Inside the refresh threshold: the refresh path runs and auth-bff answers.
+		{"refreshed", "B123456789012345678901234567890123456789012", now + 5, "refreshed", "refreshed.jwt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seed(t, addr, tc.sid, tc.exp, now+36000)
+
+			cfg := handlerConfig(addr)
+			cfg["refresh_url"] = authBff.URL + "/internal/sessions/{sid}/refresh"
+
+			var buf bytes.Buffer
+			prev := logger
+			logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})).With("plugin", pluginName)
+			t.Cleanup(func() { logger = prev })
+
+			handler, captured := buildHandler(t, cfg)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+			req.AddCookie(&http.Cookie{Name: "sid", Value: tc.sid})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200:\n%s", rec.Code, buf.String())
+			}
+			if captured.Authorization != "Bearer "+tc.wantToken {
+				t.Fatalf("Authorization = %q, want %q", captured.Authorization, "Bearer "+tc.wantToken)
+			}
+
+			logged := buf.String()
+			for _, want := range []string{
+				`"msg":"session resolved"`,
+				`"outcome":"` + tc.wantOutcome + `"`,
+				`"sub":"user-1"`,
+				`"path":"/api/projects"`,
+			} {
+				if !strings.Contains(logged, want) {
+					t.Errorf("success log is missing %s:\n%s", want, logged)
+				}
+			}
+			for _, forbidden := range []string{tc.sid, tc.wantToken} {
+				if strings.Contains(logged, forbidden) {
+					t.Errorf("log output contains %q — sids and tokens must never be logged:\n%s", forbidden, logged)
+				}
+			}
+		})
+	}
+}

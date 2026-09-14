@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/valkey-io/valkey-go"
@@ -98,19 +100,77 @@ func (s *store) load(ctx context.Context, sid string) (*sessionData, error) {
 // session's abs_exp; applying the idle TTL to it here would shorten it on every
 // renewal, letting it expire under a live session and silently breaking
 // backchannel logout — which would then no-op and answer Keycloak 200 OK.
-func (s *store) renewIdle(ctx context.Context, sid string) {
+// It returns a non-nil error only when a renewal that was actually needed
+// failed. That error used to be discarded, which made a persistently failing
+// EXPIRE indistinguishable from a healthy session: the request still
+// succeeded, the key still aged out on its original TTL, and the only symptom
+// was users being logged out mid-session with nothing in the logs. The caller
+// logs it at warn and serves the request anyway — a failed TTL renewal is not
+// a reason to deny a session that is still valid.
+//
+// A TTL reply of <= 0 is not an error: the key either has no TTL or is already
+// gone, and neither is something a renewal can fix.
+func (s *store) renewIdle(ctx context.Context, sid string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
 	ttlSeconds, err := s.client.Do(ctx, s.client.B().Ttl().Key(s.key(sid)).Build()).AsInt64()
-	if err != nil || ttlSeconds <= 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if ttlSeconds <= 0 {
+		return nil
 	}
 	ttl := time.Duration(ttlSeconds) * time.Second
 	if ttl*2 < s.idleTTL {
 		expire := s.client.B().Expire().Key(s.key(sid)).Seconds(int64(s.idleTTL.Seconds())).Build()
-		_ = s.client.Do(ctx, expire).Error()
+		return s.client.Do(ctx, expire).Error()
 	}
+	return nil
+}
+
+// storeErrorClass reduces a Valkey failure to a short, log-safe
+// classification, the same discipline refreshErrorClass (main.go) applies to
+// the refresh path. A raw err.Error() on this path can carry a dialled
+// address, a server-side message quoting command arguments, or whatever a
+// future driver version decides to include; a session key is one of those
+// arguments. Only a fixed vocabulary reaches the logs, plus a Valkey error
+// CODE (the leading all-caps token servers always send: NOAUTH, WRONGTYPE,
+// LOADING...), which carries the operational signal without any argument
+// text.
+func storeErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case valkey.IsValkeyNil(err):
+		return "nil_reply"
+	}
+	if verr, ok := valkey.IsValkeyErr(err); ok {
+		return "valkey_" + strings.ToLower(valkeyErrorCode(verr.Error()))
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	return "unavailable"
+}
+
+// valkeyErrorCode returns the leading token of a Valkey error reply only when
+// it is the conventional all-caps error code. Anything else is free-form
+// message text and is dropped.
+func valkeyErrorCode(message string) string {
+	fields := strings.Fields(message)
+	if len(fields) == 0 {
+		return "error"
+	}
+	if strings.Trim(fields[0], "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" {
+		return "error"
+	}
+	return fields[0]
 }
 
 func (s *store) drop(ctx context.Context, sid string) {
