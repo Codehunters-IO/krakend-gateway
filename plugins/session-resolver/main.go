@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -147,17 +148,28 @@ func (r registerer) registerHandlers(
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		what, sid := decide(toRequest(req, cfg.CookieName), cfg, skipExact, skipRegexes)
 
-		switch what {
-		case actionPassThrough:
+		if what == actionPassThrough {
+			// decide() trusts a caller-supplied bearer (or a CORS preflight,
+			// or the no-cookie case it defers to jwt-headers) enough to skip
+			// session resolution entirely — but "we didn't need the cookie"
+			// is not license to forward one: a backend that can read the
+			// session cookie can impersonate the session regardless of
+			// which branch let the request through. Skip paths are the one
+			// exception, since auth-bff owns this cookie and reads it
+			// directly on /auth/session and /auth/logout.
+			if !(skipExact[req.URL.Path] || matchesAny(req.URL.Path, skipRegexes)) {
+				req.Header.Del("Cookie")
+			}
 			h.ServeHTTP(w, req)
 			return
-		case actionUnauthorized:
-			deny(w, req, http.StatusUnauthorized, "malformed_session")
-			return
-		case actionForbidden:
-			deny(w, req, http.StatusForbidden, "csrf_reject")
+		}
+		if status, outcome, terminal := actionResponse(what); terminal {
+			deny(w, req, status, outcome)
 			return
 		}
+		// what == actionResolve from here on — actionResponse's default
+		// branch denies everything else, so falling past it here means
+		// exactly that.
 
 		ctx := req.Context()
 
@@ -169,6 +181,16 @@ func (r registerer) registerHandlers(
 			return
 		}
 		if data == nil {
+			deny(w, req, http.StatusUnauthorized, "miss")
+			return
+		}
+		if data.AccessToken == "" {
+			// A present-but-empty access_token (a corrupted or partial
+			// write) would otherwise sail past every check below — Exp/AbsExp
+			// can both be healthy — and get forwarded as a bare "Bearer ".
+			// Task 4's tokenOrErr guards exactly this for refresh()'s own
+			// return paths; nothing guarded the plain, no-refresh-needed
+			// path until now.
 			deny(w, req, http.StatusUnauthorized, "miss")
 			return
 		}
@@ -195,7 +217,12 @@ func (r registerer) registerHandlers(
 					deny(w, req, http.StatusUnauthorized, "refresh_session_gone")
 					return
 				}
-				logger.Error("refresh failed", "sub", data.Subject, "err", err.Error())
+				// refreshErrorClass, not err.Error(): callAuthBff's HTTP call
+				// is built against a sid-parameterised URL, and an unwrapped
+				// transport error's message embeds that URL. refresh.go
+				// already strips it before returning, but this log line must
+				// not depend on that alone for a value this sensitive.
+				logger.Error("refresh failed", "sub", data.Subject, "class", refreshErrorClass(err))
 				deny(w, req, http.StatusServiceUnavailable, "refresh_error")
 				return
 			}
@@ -210,6 +237,49 @@ func (r registerer) registerHandlers(
 
 		h.ServeHTTP(w, req)
 	}), nil
+}
+
+// actionResponse maps every decide() outcome that terminates the request
+// before session resolution to a status/outcome pair. actionResolve is not
+// terminal — it is the one outcome that falls through to session resolution
+// — and actionPassThrough has no entry here at all, since it forwards
+// rather than denies and is handled by its own branch above. Any action
+// value this switch does not recognize denies via the default branch: a
+// future action added to decide.go without updating this function must
+// still fail closed here rather than silently entering session resolution.
+func actionResponse(what action) (status int, outcome string, terminal bool) {
+	switch what {
+	case actionUnauthorized:
+		return http.StatusUnauthorized, "malformed_session", true
+	case actionForbidden:
+		return http.StatusForbidden, "csrf_reject", true
+	case actionResolve:
+		return 0, "", false
+	default:
+		return http.StatusUnauthorized, "unrecognized_action", true
+	}
+}
+
+// refreshErrorClass reduces a refresh() failure to a short, log-safe
+// classification instead of its free-form Error() text. refresh()'s
+// underlying failures can originate from an HTTP call built against a
+// sid-parameterised URL (auth-bff's refresh endpoint); refresh.go strips
+// that URL before returning, but the logging call site must not be the only
+// thing standing between a session identifier and structured logs.
+func refreshErrorClass(err error) string {
+	switch {
+	case errors.Is(err, errInvalidObservedExp):
+		return "invalid_observed_exp"
+	case errors.Is(err, errAuthBffEmptyToken):
+		return "auth_bff_empty_token"
+	case errors.Is(err, errNoAccessToken):
+		return "empty_stored_token"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	return "refresh_failed"
 }
 
 func toRequest(req *http.Request, cookieName string) request {

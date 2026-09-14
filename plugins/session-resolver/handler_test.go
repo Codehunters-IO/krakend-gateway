@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/valkey-io/valkey-go"
 )
 
 func buildHandler(t *testing.T, cfg map[string]interface{}) (http.Handler, *capturedRequest) {
@@ -114,6 +119,19 @@ func TestHandlerFailureModes(t *testing.T) {
 			build: func() (*http.Request, string) {
 				r := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 				r.AddCookie(&http.Cookie{Name: "sid", Value: "L123456789012345678901234567890123456789012"})
+				return r, addr
+			},
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// Drives actionUnauthorized (decide.go's sidFormat rejection) —
+			// every other case in this table uses a well-formed 43-character
+			// sid, so without this one the malformed-cookie branch of the
+			// handler's switch never runs at all.
+			name: "malformed session cookie is 401 without touching valkey",
+			build: func() (*http.Request, string) {
+				r := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+				r.AddCookie(&http.Cookie{Name: "sid", Value: "too-short"})
 				return r, addr
 			},
 			wantStatus: http.StatusUnauthorized,
@@ -314,6 +332,247 @@ func TestHandlerRefreshObservesLoadedExpNotAbsExpOrNow(t *testing.T) {
 		}
 		if got := calls.Load(); got != 1 {
 			t.Errorf("auth-bff called %d times, want exactly 1", got)
+		}
+	})
+}
+
+// TestHandlerRefreshFailureNeverLogsTheSid pins the constraint that a
+// refresh failure must never put the sid into the logs. callAuthBff builds
+// its request against a URL with the sid substituted in
+// (.../sessions/{sid}/refresh); before refresh.go's fix, an unreachable
+// auth-bff produced a *url.Error whose Error() embeds that exact URL, and
+// registerHandlers logged it verbatim via err.Error() on the "refresh
+// failed" line. This swaps the package-level logger for one writing to a
+// buffer, drives a refresh against an address nothing listens on, and
+// greps the captured output for the sid.
+func TestHandlerRefreshFailureNeverLogsTheSid(t *testing.T) {
+	addr := startValkey(t)
+	sid := "P123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	// Exp is inside the refresh threshold, so decide's resolve path always
+	// attempts a refresh; refresh_url points at a port nothing listens on,
+	// so callAuthBff's HTTP call always fails.
+	seed(t, addr, sid, now+5, now+36000)
+
+	cfg := handlerConfig(addr)
+	cfg["refresh_url"] = "http://127.0.0.1:1/internal/sessions/{sid}/refresh"
+	cfg["refresh_timeout_ms"] = 200
+	cfg["valkey_timeout_ms"] = 200
+
+	var buf bytes.Buffer
+	prev := logger
+	logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})).With("plugin", pluginName)
+	t.Cleanup(func() { logger = prev })
+
+	handler, captured := buildHandler(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.AddCookie(&http.Cookie{Name: "sid", Value: sid})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (unreachable auth-bff must fail closed)", rec.Code)
+	}
+	if captured.Called {
+		t.Error("backend was called despite a refresh failure — must fail closed")
+	}
+	if strings.Contains(buf.String(), sid) {
+		t.Errorf("log output contains the sid — a session identifier must never be logged:\n%s", buf.String())
+	}
+}
+
+// TestHandlerEmptyStoredAccessTokenIsDenied pins the guard against a
+// present-but-empty access_token: store.load only returns (nil, nil) for a
+// nil Valkey reply, not for an empty string field, so a corrupted or
+// partial write with a healthy Exp/AbsExp would otherwise sail past every
+// check and get forwarded as a bare "Bearer " with no error at all. Task 4's
+// tokenOrErr guards this for refresh()'s own return paths; this pins the
+// same guard on the plain, no-refresh-needed path that never calls
+// tokenOrErr.
+func TestHandlerEmptyStoredAccessTokenIsDenied(t *testing.T) {
+	addr := startValkey(t)
+	sid := "S123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	seedEmptyAccessToken(t, addr, sid, now+9000, now+36000) // far from the refresh threshold
+
+	handler, captured := buildHandler(t, handlerConfig(addr))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.AddCookie(&http.Cookie{Name: "sid", Value: sid})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if captured.Called {
+		t.Error("backend was called with an empty access token — must fail closed")
+	}
+	if captured.Authorization == "Bearer " {
+		t.Error("a bare \"Bearer \" reached the backend")
+	}
+}
+
+func seedEmptyAccessToken(t *testing.T, addr, sid string, exp, absExp int64) {
+	t.Helper()
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:       []string{addr},
+		ForceSingleClient: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to connect to valkey: %v", err)
+	}
+	t.Cleanup(client.Close)
+
+	ctx := context.Background()
+	key := "v1:session:" + sid
+	hset := client.B().Hset().Key(key).FieldValue().
+		FieldValue("ver", "1").
+		FieldValue("sub", "user-1").
+		FieldValue("kc_sid", "kc-1").
+		FieldValue("access_token", ""). // corrupted/incomplete write
+		FieldValue("exp", strconv.FormatInt(exp, 10)).
+		FieldValue("abs_exp", strconv.FormatInt(absExp, 10)).
+		FieldValue("refresh_token_enc", "k1.iv.cipher").
+		FieldValue("id_token_enc", "k1.iv.cipher").
+		FieldValue("created_at", strconv.FormatInt(exp-300, 10)).
+		Build()
+	if err := client.Do(ctx, hset).Error(); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	if err := client.Do(ctx, client.B().Expire().Key(key).Seconds(1800).Build()).Error(); err != nil {
+		t.Fatalf("expire failed: %v", err)
+	}
+}
+
+// TestActionResponseDeniesUnknownAction pins actionResponse's default
+// branch: an action value none of the explicit cases recognize must be
+// terminal (deny), never treated as actionResolve. Deleting the default
+// branch leaves the switch's implicit zero-value return (0, "", false) in
+// its place — terminal=false — which would silently route straight into
+// session resolution instead of denying; that is exactly what this test
+// would catch.
+func TestActionResponseDeniesUnknownAction(t *testing.T) {
+	status, outcome, terminal := actionResponse(action(99))
+	if !terminal {
+		t.Fatal("an unrecognized action must be terminal (deny), not fall through to session resolution")
+	}
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
+	}
+	if outcome != "unrecognized_action" {
+		t.Errorf("outcome = %q, want unrecognized_action", outcome)
+	}
+}
+
+// TestHandlerRefreshErrorMapping exercises the refresh()-error-to-status
+// mapping (main.go's `if err != nil` block after refresh.refresh) through
+// the full handler, not just refresh_test.go's direct calls to refresh().
+// Deleting that whole block leaves the suite green otherwise: nothing else
+// asserts on the status code auth-bff's own response produces once it's
+// reached through registerHandlers.
+func TestHandlerRefreshErrorMapping(t *testing.T) {
+	t.Run("auth-bff 401 means the session is gone: handler returns 401 without forwarding", func(t *testing.T) {
+		addr := startValkey(t)
+		sid := "T323456789012345678901234567890123456789012"
+		now := time.Now().Unix()
+		seed(t, addr, sid, now+5, now+36000) // inside the refresh threshold
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer server.Close()
+
+		cfg := handlerConfig(addr)
+		cfg["refresh_url"] = server.URL + "/internal/sessions/{sid}/refresh"
+
+		handler, captured := buildHandler(t, cfg)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+		req.AddCookie(&http.Cookie{Name: "sid", Value: sid})
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+		if captured.Called {
+			t.Error("backend was called despite auth-bff reporting the session gone")
+		}
+	})
+
+	t.Run("auth-bff 500 is a transient failure: handler returns 503 without forwarding", func(t *testing.T) {
+		addr := startValkey(t)
+		sid := "U423456789012345678901234567890123456789012"
+		now := time.Now().Unix()
+		seed(t, addr, sid, now+5, now+36000)
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		cfg := handlerConfig(addr)
+		cfg["refresh_url"] = server.URL + "/internal/sessions/{sid}/refresh"
+
+		handler, captured := buildHandler(t, cfg)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+		req.AddCookie(&http.Cookie{Name: "sid", Value: sid})
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want 503", rec.Code)
+		}
+		if captured.Called {
+			t.Error("backend was called despite a transient refresh failure")
+		}
+	})
+}
+
+// TestHandlerPassThroughCookieHandling pins the coordinator's ruling on the
+// pass-through branch: a request that carries its own bearer (or hits any
+// other actionPassThrough path) must not forward the session cookie to the
+// backend, EXCEPT on a skip path — auth-bff owns that cookie and reads it
+// directly on /auth/session and /auth/logout.
+func TestHandlerPassThroughCookieHandling(t *testing.T) {
+	addr := startValkey(t)
+
+	t.Run("a bearer-carrying request must not forward the session cookie to the backend", func(t *testing.T) {
+		handler, captured := buildHandler(t, handlerConfig(addr))
+
+		req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+		req.Header.Set("Authorization", "Bearer mcp-token")
+		req.AddCookie(&http.Cookie{Name: "sid", Value: "V523456789012345678901234567890123456789012"})
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if captured.Authorization != "Bearer mcp-token" {
+			t.Errorf("Authorization = %q, want the caller's own token", captured.Authorization)
+		}
+		if captured.Cookie != "" {
+			t.Errorf("Cookie reached the backend on a bearer-carrying request: %q — a backend that can read the session cookie can impersonate the session", captured.Cookie)
+		}
+	})
+
+	t.Run("a skip path must still receive the session cookie — auth-bff owns it", func(t *testing.T) {
+		handler, captured := buildHandler(t, handlerConfig(addr))
+
+		req := httptest.NewRequest(http.MethodGet, "/auth/login/keycloak", nil)
+		req.AddCookie(&http.Cookie{Name: "sid", Value: "W623456789012345678901234567890123456789012"})
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if captured.Cookie == "" {
+			t.Error("Cookie was stripped on a skip path — auth-bff reads this cookie directly on /auth/session and /auth/logout")
 		}
 	})
 }

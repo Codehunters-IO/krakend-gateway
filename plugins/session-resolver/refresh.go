@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -28,6 +29,14 @@ var errSessionGone = errors.New("session gone")
 // return value looks wrong. Failing closed here turns that whole misuse
 // class into a 503 instead.
 var errInvalidObservedExp = errors.New("observedExp must be a positive unix timestamp")
+
+// errNoAccessToken and errAuthBffEmptyToken are sentinels rather than
+// inline errors.New calls so main.go can classify a refresh failure for
+// logging (see refreshErrorClass) without inspecting free-form message
+// text — the same text a *url.Error elsewhere on this path would otherwise
+// carry the sid straight into.
+var errNoAccessToken = errors.New("session has no access token")
+var errAuthBffEmptyToken = errors.New("auth-bff returned an empty access token")
 
 // releaseScript deletes the refresh lock only if it still holds the value
 // this caller wrote when it acquired it — a compare-and-delete, since a
@@ -203,7 +212,7 @@ func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) 
 // success carrying no usable token.
 func tokenOrErr(data *sessionData) (string, error) {
 	if data.AccessToken == "" {
-		return "", errors.New("session has no access token")
+		return "", errNoAccessToken
 	}
 	return data.AccessToken, nil
 }
@@ -292,20 +301,29 @@ func (r *refresher) waitForOtherRefresh(ctx context.Context, sid string, observe
 }
 
 func (r *refresher) callAuthBff(ctx context.Context, sid string) (string, error) {
-	url := strings.ReplaceAll(r.url, "{sid}", sid)
+	reqURL := strings.ReplaceAll(r.url, "{sid}", sid)
 
 	reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, reqURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("building auth-bff request: %w", stripURL(err))
 	}
 	req.Header.Set("X-Internal-Secret", r.secret)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return "", err
+		// r.client.Do wraps every transport failure (refused connection,
+		// timeout, DNS...) in a *url.Error whose Error() renders as
+		// `Post "<reqURL>": <cause>` — and reqURL is this sid substituted
+		// into r.url. That is the single most common failure on this path
+		// (any auth-bff outage produces one per request), so leaving it
+		// unwrapped would put the session identifier into structured logs
+		// on every caller of refresh() that logs this error. stripURL keeps
+		// the underlying cause (connection refused, context deadline
+		// exceeded, ...) and drops the URL.
+		return "", fmt.Errorf("calling auth-bff: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -323,7 +341,22 @@ func (r *refresher) callAuthBff(ctx context.Context, sid string) (string, error)
 		return "", err
 	}
 	if body.AccessToken == "" {
-		return "", errors.New("auth-bff returned an empty access token")
+		return "", errAuthBffEmptyToken
 	}
 	return body.AccessToken, nil
+}
+
+// stripURL unwraps a *url.Error to its underlying cause, discarding the URL
+// it carries. Every error this function's caller passes through here comes
+// from an HTTP call whose URL is sid-parameterised (callAuthBff builds it as
+// .../sessions/{sid}/refresh) — the URL is a credential-equivalent value
+// that must never reach a log line via a bare err.Error(). Errors that are
+// not a *url.Error (e.g. an already-classified sentinel) pass through
+// unchanged.
+func stripURL(err error) error {
+	var uerr *neturl.Error
+	if errors.As(err, &uerr) {
+		return uerr.Err
+	}
+	return err
 }
