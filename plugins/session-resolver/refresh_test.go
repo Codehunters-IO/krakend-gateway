@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,8 @@ func TestRefresh(t *testing.T) {
 	client := seed(t, addr, sid, now+5, now+36000)
 
 	var calls atomic.Int32
+	var mockExp atomic.Int64
+	mockExp.Store(now + 5)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		calls.Add(1)
 		if req.Header.Get("X-Internal-Secret") != "s3cret" {
@@ -31,8 +34,15 @@ func TestRefresh(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// The new token must land in Valkey, exactly as auth-bff does it.
-		hset := client.B().Hset().Key("v1:session:"+sid).FieldValue().FieldValue("access_token", "fresh.jwt").Build()
+		// The new token — and a strictly-later exp — must land in Valkey,
+		// exactly as auth-bff does it: it rewrites the whole session hash
+		// on every refresh, so a real refresh always advances exp. This is
+		// what waitForOtherRefresh's losers actually wait on.
+		newExp := mockExp.Add(300)
+		hset := client.B().Hset().Key("v1:session:"+sid).FieldValue().
+			FieldValue("access_token", "fresh.jwt").
+			FieldValue("exp", strconv.FormatInt(newExp, 10)).
+			Build()
 		client.Do(req.Context(), hset)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"fresh.jwt"}`))
@@ -56,7 +66,7 @@ func TestRefresh(t *testing.T) {
 	r := newRefresher(cfg, s)
 
 	t.Run("returns the refreshed access token", func(t *testing.T) {
-		token, err := r.refresh(context.Background(), sid)
+		token, err := r.refresh(context.Background(), sid, now+5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -65,22 +75,69 @@ func TestRefresh(t *testing.T) {
 		}
 	})
 
-	t.Run("only one of many concurrent callers hits auth-bff", func(t *testing.T) {
+	t.Run("only one of many concurrent callers hits auth-bff, and every caller gets the new token, not the stale one", func(t *testing.T) {
+		// Reseed a known, distinctly-stale token/exp so this subtest's
+		// assertions do not ride on the previous subtest's writes: that
+		// subtest already left access_token = "fresh.jwt" in place, which
+		// would make a losers-return-the-stale-token regression invisible
+		// here if this subtest were left to inherit it.
+		staleExp := now + 5
+		reseed := client.B().Hset().Key("v1:session:"+sid).FieldValue().
+			FieldValue("access_token", "stale.jwt").
+			FieldValue("exp", strconv.FormatInt(staleExp, 10)).
+			Build()
+		if err := client.Do(context.Background(), reseed).Error(); err != nil {
+			t.Fatalf("reseed failed: %v", err)
+		}
+		// release() clears the lock once the winner's call completes, so
+		// this DEL is defensive rather than load-bearing now — kept so this
+		// subtest's outcome never depends on the previous one's cleanup.
 		client.Do(context.Background(), client.B().Del().Key("v1:lock:refresh:"+sid).Build())
 		calls.Store(0)
 
+		// Every caller passes the SAME observedExp (staleExp) — the value
+		// each of them "already knew" was stale before deciding to call
+		// refresh(), exactly as Task 5's handler will: it reads the
+		// session once, decides a refresh is warranted, then calls
+		// refresh() with that reading's Exp. Using a shared external value
+		// here, rather than letting each goroutine derive it from its own
+		// internal read, is what makes "exactly one auth-bff call" a
+		// property of the code rather than of scheduling luck — a goroutine
+		// that starts late enough to read the ALREADY-refreshed session on
+		// its own would otherwise have no way to distinguish "nothing
+		// happened yet" from "I'm seeing the result of the refresh that
+		// just finished", however tightly the start is synchronized.
+		//
+		// A start barrier, not a plain spawn loop, still narrows real start
+		// times as far as the runtime allows — kept because it makes this
+		// test a closer model of "many concurrent callers", not because it
+		// is what makes the assertion below safe to rely on.
+		start := make(chan struct{})
 		var wg sync.WaitGroup
+		tokens := make([]string, 20)
+		errs := make([]error, 20)
 		for i := 0; i < 20; i++ {
 			wg.Add(1)
-			go func() {
+			go func(i int) {
 				defer wg.Done()
-				_, _ = r.refresh(context.Background(), sid)
-			}()
+				<-start
+				tokens[i], errs[i] = r.refresh(context.Background(), sid, staleExp)
+			}(i)
 		}
+		close(start)
 		wg.Wait()
 
 		if got := calls.Load(); got != 1 {
 			t.Errorf("auth-bff called %d times, want exactly 1", got)
+		}
+		for i := range tokens {
+			if errs[i] != nil {
+				t.Errorf("caller %d: unexpected error: %v", i, errs[i])
+				continue
+			}
+			if tokens[i] != "fresh.jwt" {
+				t.Errorf("caller %d: token = %q, want fresh.jwt — a loser returned the stale pre-refresh token instead of waiting for the winner's write", i, tokens[i])
+			}
 		}
 	})
 }
@@ -115,7 +172,7 @@ func TestRefreshFailureModes(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
-		_, err = r.refresh(context.Background(), sid)
+		_, err = r.refresh(context.Background(), sid, now+5)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
 		}
@@ -137,7 +194,7 @@ func TestRefreshFailureModes(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
-		_, err = r.refresh(context.Background(), sid)
+		_, err = r.refresh(context.Background(), sid, now+5)
 		if err == nil || errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want a non-session-gone error", err)
 		}
@@ -172,7 +229,7 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
-		token, err := r.refresh(context.Background(), sid)
+		token, err := r.refresh(context.Background(), sid, now+5)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
 		}
@@ -210,7 +267,7 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
-		_, err = r.refresh(context.Background(), sid)
+		_, err = r.refresh(context.Background(), sid, 0)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
 		}
@@ -232,7 +289,7 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
-		_, err = r.refresh(context.Background(), "Q123456789012345678901234567890123456789012")
+		_, err = r.refresh(context.Background(), "Q123456789012345678901234567890123456789012", 0)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
 		}
