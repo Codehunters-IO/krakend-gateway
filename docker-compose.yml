@@ -1,4 +1,15 @@
 services:
+  valkey:
+    image: valkey/valkey:9-alpine
+    container_name: forgeos-gw-valkey
+    # appendonly no is deliberate: session tokens must not reach disk.
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:-devpassword}", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:-devpassword}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   krakend:
     image: krakend:2.13.4
     ports:
@@ -12,6 +23,9 @@ services:
       # Reach host-published services (backend :8080, Keycloak :8083) from inside the container.
       # macOS Docker Desktop provides host.docker.internal natively; this makes Linux work too.
       - "host.docker.internal:host-gateway"
+    depends_on:
+      valkey:
+        condition: service_healthy
     environment:
       - FC_ENABLE=1
       - FC_SETTINGS=/etc/krakend/settings
@@ -24,6 +38,14 @@ services:
       # /auth/* routes reach it through here; the session-resolver plugin talks
       # to its /internal endpoint directly, never through the gateway.
       - AUTH_BFF_HOST=${AUTH_BFF_HOST:-http://host.docker.internal:8086}
+      # session-resolver: reads the server-side session auth-bff writes to
+      # Valkey and turns it into an Authorization: Bearer header.
+      - SESSION_ENABLED=${SESSION_ENABLED:-}
+      - VALKEY_ADDR=${VALKEY_ADDR:-valkey:6379}
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD:-devpassword}
+      - SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME:-sid}
+      - AUTH_BFF_REFRESH_URL=${AUTH_BFF_REFRESH_URL:-http://host.docker.internal:8086/internal/sessions/{sid}/refresh}
+      - INTERNAL_SHARED_SECRET=${INTERNAL_SHARED_SECRET:?internal shared secret is required}
       # Keycloak forgeos realm. issuer must equal the token `iss`; JWKS resolved from inside the container.
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-http://localhost:8083/realms/forgeos}
       - KEYCLOAK_JWKS_URL=${KEYCLOAK_JWKS_URL:-http://host.docker.internal:8083/realms/forgeos/protocol/openid-connect/certs}
