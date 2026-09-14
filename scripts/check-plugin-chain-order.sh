@@ -34,10 +34,29 @@ names=$(jq -c '(.extra_config."plugin/http-server".name // [])' "$OUT_FILE")
 has_session=$(echo "$names" | jq 'any(. == "krakend-session-resolver")')
 has_jwt=$(echo "$names" | jq 'any(. == "krakend-jwt-headers")')
 
-if [[ "$has_session" != "true" || "$has_jwt" != "true" ]]; then
-  # One or both disabled (SESSION_ENABLED=false / JWT_ENABLED=false) — the
-  # ordering constraint between them is moot in that configuration.
-  echo "check-plugin-chain-order: OK (session-resolver and/or jwt-headers disabled, nothing to check)"
+# session-resolver without jwt-headers is fail-OPEN, not merely unordered.
+# The plugin passes a request with neither cookie nor bearer straight through
+# on the documented assumption that jwt-headers will 401 it (see the
+# actionPassThrough branch in plugins/session-resolver/main.go). With
+# jwt-headers absent, nothing does: every unauthenticated request reaches the
+# backend. This combination must never render, so it fails here rather than
+# reading as "nothing to check".
+if [[ "$has_session" == "true" && "$has_jwt" != "true" ]]; then
+  echo "check-plugin-chain-order: FAILED" >&2
+  echo "  krakend-session-resolver is enabled but krakend-jwt-headers is not." >&2
+  echo "  session-resolver forwards requests carrying neither a session cookie" >&2
+  echo "  nor an Authorization header, relying on jwt-headers to reject them." >&2
+  echo "  Without jwt-headers in the chain that is a fail-open edge." >&2
+  echo "  Either enable JWT_ENABLED, or disable SESSION_ENABLED too." >&2
+  echo "  Declared order was: $names" >&2
+  exit 1
+fi
+
+if [[ "$has_session" != "true" ]]; then
+  # session-resolver disabled (SESSION_ENABLED=false) — the ordering
+  # constraint between the two is moot in that configuration, and
+  # jwt-headers alone is the pre-session-resolver posture.
+  echo "check-plugin-chain-order: OK (session-resolver disabled, nothing to check)"
   exit 0
 fi
 
