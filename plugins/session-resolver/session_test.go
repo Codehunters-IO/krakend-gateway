@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,4 +261,84 @@ func TestStoreLoadWithMalformedExpiryFields(t *testing.T) {
 	if data.AbsExp != 0 {
 		t.Errorf("abs_exp = %d, want 0 (malformed value silently zeroed by asInt64)", data.AbsExp)
 	}
+}
+
+// TestStoreLoadRequestsOnlyNonSecretFields pins the HMGET *field list*, at the
+// wire, against the one invariant the whole design rests on: the edge can read
+// an access token but can never read refresh_token_enc or id_token_enc, so a
+// compromised gateway yields short-lived tokens rather than the ability to
+// mint new ones.
+//
+// Every other test here asserts decoded VALUES, which is why none of them
+// noticed: adding refresh_token_enc to the HMGET breaks nothing, since the
+// extra reply element is simply never decoded. So this test reads what the
+// server actually received. slowlog-log-slower-than 0 makes Valkey record
+// every command with its full argument vector, and SLOWLOG GET reads them
+// back — the same evidence a MONITOR session would give, without needing a
+// streaming connection.
+func TestStoreLoadRequestsOnlyNonSecretFields(t *testing.T) {
+	addr := startValkey(t)
+	sid := "F123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	client := seed(t, addr, sid, now+9000, now+36000)
+
+	ctx := context.Background()
+	logAll := client.B().Arbitrary("CONFIG", "SET", "slowlog-log-slower-than", "0").Build()
+	if err := client.Do(ctx, logAll).Error(); err != nil {
+		t.Fatalf("failed to enable full slowlog capture: %v", err)
+	}
+	if err := client.Do(ctx, client.B().Arbitrary("SLOWLOG", "RESET").Build()).Error(); err != nil {
+		t.Fatalf("failed to reset the slowlog: %v", err)
+	}
+
+	s, err := newStore(&pluginConfig{
+		ValkeyAddr:      addr,
+		ValkeyTimeoutMs: 500,
+		KeyPrefix:       "v1:",
+		IdleTTLSeconds:  1800,
+	})
+	if err != nil {
+		t.Fatalf("failed to build the store: %v", err)
+	}
+	if _, err := s.load(ctx, sid); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	got := lastCommandNamed(t, client, "HMGET")
+	want := []string{"HMGET", "v1:session:" + sid, "access_token", "sub", "exp", "abs_exp"}
+	if len(got) != len(want) {
+		t.Fatalf("HMGET sent %d arguments, want %d:\n got: %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if !strings.EqualFold(got[i], want[i]) {
+			t.Fatalf("HMGET argument %d = %q, want %q.\n got: %v\nwant: %v\n"+
+				"The edge must never request an _enc field: it cannot decrypt one, and asking for it "+
+				"puts ciphertext only auth-bff may hold into the gateway's memory.", i, got[i], want[i], got, want)
+		}
+	}
+}
+
+// lastCommandNamed returns the argument vector of the most recent slowlog
+// entry whose command name matches, or fails the test when none is found.
+// A slowlog entry is [id, unix_time, duration_us, args, client_addr,
+// client_name]; args is the full command as the server received it.
+func lastCommandNamed(t *testing.T, client valkey.Client, name string) []string {
+	t.Helper()
+	entries, err := client.Do(context.Background(), client.B().Arbitrary("SLOWLOG", "GET", "128").Build()).ToArray()
+	if err != nil {
+		t.Fatalf("SLOWLOG GET failed: %v", err)
+	}
+	for _, entry := range entries {
+		fields, err := entry.ToArray()
+		if err != nil || len(fields) < 4 {
+			continue
+		}
+		args, err := fields[3].AsStrSlice()
+		if err != nil || len(args) == 0 || !strings.EqualFold(args[0], name) {
+			continue
+		}
+		return args
+	}
+	t.Fatalf("no %s command reached valkey", name)
+	return nil
 }

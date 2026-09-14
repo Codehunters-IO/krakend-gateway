@@ -52,6 +52,24 @@ func TestParseConfig(t *testing.T) {
 		}
 	})
 
+	// key_prefix is the cross-repo key namespace: auth-bff writes v1:session:{sid}
+	// and this plugin must read the same keys. Every other default is local to
+	// the plugin; getting this one wrong makes it read an empty namespace and
+	// 401 every cookie-carrying request, so the default is pinned here rather
+	// than only implied by the settings file that happens to set it today.
+	t.Run("defaults key_prefix to the v1: namespace auth-bff writes", func(t *testing.T) {
+		m := cloneConfigMap(valid)
+		delete(m[pluginName].(map[string]interface{}), "key_prefix")
+
+		cfg, err := parseConfig(m)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.KeyPrefix != "v1:" {
+			t.Errorf("key_prefix default = %q, want v1:", cfg.KeyPrefix)
+		}
+	})
+
 	// Misconfiguration must stop the gateway from starting, never degrade silently.
 	for _, tc := range []struct {
 		name    string
