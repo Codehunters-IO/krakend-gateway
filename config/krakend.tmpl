@@ -3,6 +3,7 @@
 {{- $tcEnabled := eq (env "TRACE_CONTEXT_ENABLED" | default (printf "%v" .trace_context.enabled)) "true" -}}
 {{- $irEnabled := eq (env "IP_RESOLVER_ENABLED" | default (printf "%v" .ip_resolver.enabled)) "true" -}}
 {{- $jwtEnabled := eq (env "JWT_ENABLED" | default (printf "%v" .jwt.enabled)) "true" -}}
+{{- $sessEnabled := eq (env "SESSION_ENABLED" | default (printf "%v" .session.enabled)) "true" -}}
 {{- $shEnabled := eq (env "SECURITY_HEADERS_ENABLED" | default (printf "%v" .security_headers.enabled)) "true" -}}
 {
   "$schema": "https://www.krakend.io/schema/krakend.json",
@@ -49,13 +50,16 @@
         "krakend-trace-context"{{ if or $irEnabled $jwtEnabled }},{{ end }}
         {{- end }}
         {{- if $irEnabled }}
-        "krakend-ip-resolver"{{ if $jwtEnabled }},{{ end }}
+        "krakend-ip-resolver"{{ if or $sessEnabled $jwtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $sessEnabled }}
+        "krakend-session-resolver"{{ if $jwtEnabled }},{{ end }}
         {{- end }}
         {{- if $jwtEnabled }}
         "krakend-jwt-headers"
         {{- end }}
       ]
-      {{- if or $gtEnabled $alEnabled $irEnabled $jwtEnabled }},{{ end }}
+      {{- if or $gtEnabled $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- if $gtEnabled }}
       "krakend-gateway-timeout": {
         "trigger_status": {{ .gateway_timeout.trigger_status }},
@@ -73,6 +77,25 @@
         "api_base_url": "{{ .ip_resolver.api_base_url }}",
         "cache_ttl_minutes": {{ .ip_resolver.cache_ttl_minutes }},
         "skip_paths": {{ marshal .ip_resolver.skip_paths }}
+      }{{ if or $sessEnabled $jwtEnabled }},{{ end }}
+      {{- end }}
+      {{- if $sessEnabled }}
+      "krakend-session-resolver": {
+        "valkey_addr": "{{ env "VALKEY_ADDR" | default .session.valkey_addr }}",
+        "valkey_password": "{{ env "VALKEY_PASSWORD" | default "" }}",
+        "valkey_db": {{ .session.valkey_db }},
+        "valkey_timeout_ms": {{ .session.valkey_timeout_ms }},
+        "key_prefix": "{{ .session.key_prefix }}",
+        "cookie_name": "{{ env "SESSION_COOKIE_NAME" | default .session.cookie_name }}",
+        "idle_ttl_seconds": {{ .session.idle_ttl_seconds }},
+        "refresh_threshold_seconds": {{ .session.refresh_threshold_seconds }},
+        "refresh_url": "{{ env "AUTH_BFF_REFRESH_URL" | default .session.refresh_url }}",
+        "refresh_timeout_ms": {{ .session.refresh_timeout_ms }},
+        "refresh_lock_ttl_seconds": {{ .session.refresh_lock_ttl_seconds }},
+        "internal_secret": "{{ env "INTERNAL_SHARED_SECRET" | default "" }}",
+        "allowed_origins": {{ marshal .session.allowed_origins }},
+        "csrf_safe_methods": {{ marshal .session.csrf_safe_methods }},
+        "skip_paths": {{ marshal .session.skip_paths }}
       }{{ if $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $jwtEnabled }}
