@@ -39,16 +39,24 @@
   },
   "extra_config": {
     "plugin/http-server": {
-      {{/* KrakenD's plugin/http-server wraps handlers as A(B(C(...))) for
-           name:[A,B,C] — the LAST entry executes FIRST (see
-           https://www.krakend.io/docs/design/execution-flow/). This array is
-           declared in reverse of the intended request-time chain so that
-           jwt-headers (declared first, executes last) sits closest to the
-           router/backend, after session-resolver has had a chance to turn a
-           cookie into the Authorization header it validates. Declaring this
-           list in "chain order" instead of reversed silently makes
-           jwt-headers run first and reject every cookie-only request before
-           session-resolver ever sees it. */}}
+      {{/* KrakenD's plugin/http-server executes plugins in the REVERSE of
+           their declared order: each entry wraps the ones declared before
+           it, so for name:[A,B,C] the composition is C(B(A(router))) — C
+           (declared LAST) runs FIRST, A (declared first) runs last, closest
+           to the router. Confirmed empirically in this repo, not just cited
+           from docs (see the chain-order section of docs/session-flow.md
+           for the A/B evidence): declaring this array in chain order
+           (session-resolver before jwt-headers, as written) made
+           jwt-headers execute FIRST and reject every cookie-only request
+           before session-resolver ever saw it — silently, since krakend
+           check still says "Syntax OK!" and every plugin still logs
+           "plugin loaded". This array is declared in the REVERSE of the
+           intended request-time chain (jwt-headers first, gateway-timeout
+           last) so the actual execution order matches: gateway-timeout ->
+           accept-language -> trace-context -> ip-resolver ->
+           session-resolver -> jwt-headers. If you touch this array, keep it
+           reversed and re-run the seeded-session check in
+           docs/session-flow.md afterward. */}}
       "name": [
         {{- if $jwtEnabled }}
         "krakend-jwt-headers"{{ if or $sessEnabled $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}

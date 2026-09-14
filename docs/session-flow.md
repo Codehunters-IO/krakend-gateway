@@ -33,19 +33,107 @@ This is the order requests are actually processed in, left to right.
 
 **Why this needs saying explicitly:** KrakenD's `plugin/http-server.name`
 array does not execute in the order it is written. Each entry wraps the
-next, so for `"name": ["A", "B", "C"]` the composition is `A(B(C(...)))` —
-**the *last* entry in the array is the one that executes *first*** (see
-[KrakenD's execution flow docs](https://www.krakend.io/docs/design/execution-flow/)).
-`config/krakend.tmpl` declares the array in the *reverse* of the chain above
-(`jwt-headers` first, `gateway-timeout` last) specifically so the request-time
-order matches the diagram. Declaring the array in chain order instead is the
-natural mistake and is silent: the gateway still starts, every plugin still
-logs `"plugin loaded"`, and `krakend check` still says `Syntax OK!` — the only
-symptom is that every cookie-only request gets rejected by `jwt-headers` with
-`{"message":"missing or invalid authorization header"}` before
-`session-resolver` ever sees it, because `jwt-headers` ran first. If you touch
-this array, keep the comment above it in the template intact, and re-run the
-seeded-session check below after any change.
+ones declared *before* it, so for `"name": ["A", "B", "C"]` the composition
+is `C(B(A(router)))` — **the *last* entry in the array is the one that
+executes *first***, closest to the client; the *first* entry ends up
+innermost, closest to the router/backend.
+
+This is stated here on the strength of empirical evidence from this repo,
+not a documentation citation — an earlier draft of this paragraph cited
+[KrakenD's execution flow docs](https://www.krakend.io/docs/design/execution-flow/)
+for this exact claim while quoting the opposite formula (`A(B(C(...)))`,
+which would make the *first* entry run first), a contradiction that was
+only caught in review. That page does not currently spell out the
+plugin-array wrap order explicitly enough to quote here, so treat the
+formula above as established by the test below, not by the link. The link
+is left as background on KrakenD's general plugin model, not as proof of
+this specific ordering.
+
+**The test:** `config/krakend.tmpl` originally declared this array in
+*chain order* (`session-resolver` immediately before `jwt-headers`, matching
+the diagram above). With that declaration, every cookie-only request against
+a real running gateway was rejected by `jwt-headers` with
+`{"message":"missing or invalid authorization header"}` — including requests
+carrying a cookie that pointed at a real, valid, freshly-seeded Valkey
+session — and `session-resolver` never logged anything at all, not even its
+own denial for a deliberately malformed session id, which it always logs
+when it actually runs. That is only possible if `jwt-headers` ran *before*
+`session-resolver` on every request. Declaring the array in the *reverse* of
+chain order (`jwt-headers` first, `gateway-timeout` last, the order
+currently in the template) fixed it: the same seeded session then produced
+`jwt-headers`' `"invalid token"` log line — proof a bearer token *was*
+present and reached it — instead of the "missing" response. Full commands
+and log lines are in the seeded-session verification recorded in this
+plan's Task 9 report.
+
+The failure mode throughout is silent: the gateway starts either way, every
+plugin logs `"plugin loaded"`, and `krakend check` says `Syntax OK!`
+regardless of which order the array is in. Nothing short of driving traffic
+and reading the resulting logs distinguishes a correct chain from an
+inverted one — see **Guarding this mechanically** below for the one
+assertion that now also catches it before a request ever has to. If you
+touch this array, keep the comment above it in the template intact, and
+re-run the seeded-session check after any change.
+
+### What actually changed for the other five plugins
+
+Reversing the array to fix `session-resolver` vs. `jwt-headers` does not
+just affect those two — it reverses the request-time order of *all six*
+plugins relative to how they had been running before this plan. Before this
+fix, the declared array (`gateway-timeout, accept-language, trace-context,
+ip-resolver, session-resolver, jwt-headers`) executed in exactly that order
+reversed at request time too, by the same wrap rule: `jwt-headers` ran
+*first* (outermost) and `gateway-timeout` ran *last* (innermost, right next
+to the router). After the fix, execution order matches the diagram at the
+top of this document: `gateway-timeout` now runs first (outermost, wrapping
+the entire request/response cycle including the backend call — which is
+what lets it convert a `5xx` after the fact into a `504` on elapsed time),
+then `accept-language`, `trace-context`, `ip-resolver`, `session-resolver`,
+and finally `jwt-headers` closest to the backend.
+
+This is a genuine behavior change for traffic that has nothing to do with
+sessions, and it ships in the production `Dockerfile`'s pre-baked config too
+— not only in the `docker compose` / Flexible-Config dev path. Each of the
+five bystanders benefits from or is neutral to the new order:
+
+- **`gateway-timeout`** moves from innermost to outermost. It now wraps the
+  whole chain rather than just the last hop before the router, which is
+  what a timeout-conversion plugin needs to measure total elapsed time
+  correctly — this was arguably broken before.
+- **`accept-language`** and **`trace-context`** now run earlier relative to
+  the auth plugins. `trace-context` running ahead of every deny path (it
+  did not before) means a request rejected by `jwt-headers` or
+  `session-resolver` now carries a trace id in the gateway's own logs
+  instead of only trace-less rejections — previously-untraceable 401s
+  become traceable.
+- **`ip-resolver`** still runs, and now runs earlier, before both auth
+  plugins that consume its output (`jwt-headers`' `x-ip` header and any
+  future consumer). Its anti-spoof header strip stays ahead of every
+  consumer either way, so this is neutral-to-beneficial, not a risk.
+- **`jwt-headers`** moves from first-executed to last-executed. Its own
+  behavior per-request (JWKS validation, claims-to-headers mapping) is
+  unchanged; only its position relative to the others moved, to the
+  position the original design always intended for it.
+
+If a deploy right after this change shows unexpected trace ids on
+previously trace-less rejections, or a shifted timeout/504 pattern, this
+reordering is the reason — not a regression in any individual plugin.
+
+### Guarding this mechanically
+
+Prose alone already failed once — the comment above existed in an earlier
+form and the ordering still broke unnoticed until this task drove real
+traffic. `make check` (and therefore `make gen-check` / CI) now asserts the
+declared order mechanically, not just the JSON syntax: because the LAST
+declared entry executes FIRST, `krakend-jwt-headers` must be the *first*
+entry in the rendered `plugin/http-server.name` array whenever both it and
+`krakend-session-resolver` are enabled — so that it executes *last* — and
+`krakend-session-resolver` must be declared immediately after it, so it
+executes immediately *before* it. See
+`scripts/check-plugin-chain-order.sh`, invoked from the `check` target in
+the `Makefile`. A future edit that puts them back in chain order (i.e.
+declares `session-resolver` before `jwt-headers` again) fails `make check`
+with an explicit message instead of shipping silently.
 
 ## The four flows
 
@@ -74,7 +162,7 @@ session-resolver:
   no cookie                                              → pass through (jwt-headers 401s)
   cookie present but not 43-char base64url                → 401, no Valkey hit
   mutating method + Origin/Referer not allowed            → 403 (CSRF)
-  HMGET v1:session:{sid} access_token exp abs_exp sub
+  HMGET v1:session:{sid} access_token sub exp abs_exp
     miss / empty access_token                             → 401
     now >= abs_exp                                         → delete key, 401
     now >= exp - refresh_threshold_seconds                 → refresh (flow 3)
@@ -227,9 +315,18 @@ behave any differently than it did before this plugin was added.
   exactly this reason. If a future Go or krakend-ce upgrade changes the
   version krakend-ce embeds, this replace directive has to move with it —
   check `plugins/Dockerfile.builder`'s Go version against
-  `docker run --rm krakendio/krakend:<tag> version` (Go Version line) at the
-  same time, since both pins track the same upstream build.
+  `docker run --rm krakend:<tag> version` (Go Version line) at the same
+  time, since both pins track the same upstream build.
 - **Plugin build toolchain must match `krakend:<tag>` exactly**, not just be
   "recent enough" — see the previous point. `plugins/Dockerfile.builder`
-  pins the Go version; verify it against the target `krakend` image's
-  reported Go version before bumping either one.
+  pins the Go version that `make plugin-build` uses; verify it against the
+  target `krakend` image's reported Go version before bumping either one.
+  This pin protects the local `make plugin-build` / `make dev` path only —
+  the production `Dockerfile` builds from `krakend/builder:2.13.4` directly
+  (the same tag as the runtime `krakend:2.13.4` image), so it matches by
+  construction and has no separate version number to fall out of sync.
+  `plugins/session-resolver/go.mod`'s own `go 1.25.7` directive is a floor,
+  not a pin — the module builds fine under the newer 1.25.9 toolchain, so it
+  does not need to move in lockstep. The number that actually has to track
+  krakend-ce's embedded Go version is `plugins/Dockerfile.builder`'s `FROM
+  golang:<version>-alpine`, not the `go.mod` directive.
