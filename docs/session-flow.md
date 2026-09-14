@@ -123,10 +123,10 @@ reordering is the reason — not a regression in any individual plugin.
 
 Prose alone already failed once — the comment above existed in an earlier
 form and the ordering still broke unnoticed until this task drove real
-traffic. `make check` (and therefore `make gen-check` / CI) now asserts the
-declared order mechanically, not just the JSON syntax: because the LAST
-declared entry executes FIRST, `krakend-jwt-headers` must be the *first*
-entry in the rendered `plugin/http-server.name` array whenever both it and
+traffic. `make check` now asserts the declared order mechanically, not just
+the JSON syntax: because the LAST declared entry executes FIRST,
+`krakend-jwt-headers` must be the *first* entry in the rendered
+`plugin/http-server.name` array whenever both it and
 `krakend-session-resolver` are enabled — so that it executes *last* — and
 `krakend-session-resolver` must be declared immediately after it, so it
 executes immediately *before* it. See
@@ -134,6 +134,36 @@ executes immediately *before* it. See
 the `Makefile`. A future edit that puts them back in chain order (i.e.
 declares `session-resolver` before `jwt-headers` again) fails `make check`
 with an explicit message instead of shipping silently.
+
+`make check` is what CI runs on every pull request (the `Gateway config
+check` job in `.github/workflows/pull-request.yml`), which is what makes
+this a gate rather than a habit. Note the dependency direction in the
+`Makefile`: `gen-check` is a *prerequisite* of `check`, so running
+`make gen-check` does **not** run the chain-order guard — only `make check`
+does. An earlier revision of this document claimed otherwise while CI ran
+`gen-check` alone, leaving the guard running nowhere but a developer's
+laptop.
+
+The same script also rejects `SESSION_ENABLED=true` with
+`JWT_ENABLED=false`. That combination is fail-*open*, not merely unordered:
+`session-resolver` forwards a request carrying neither a cookie nor an
+`Authorization` header on the assumption that `jwt-headers` will reject it,
+and with `jwt-headers` absent from the chain nothing does.
+
+### Skip paths come from the endpoint spec
+
+`session-resolver`'s `skip_paths` is **generated**, not hand-written: the
+template appends every `auth: public` route in `config/settings/endpoints.json`
+(itself generated from `endpoints.yaml`) to whatever extra literals
+`config/settings/session.json` lists, rewriting path parameters to `*`
+exactly as `jwt-headers`' own skip list is built. Adding a public route
+means editing `endpoints.yaml` and running `make gen` — both plugins then
+agree by construction.
+
+This used to be two lists. They agreed at the time, and nothing detected
+drift: the first public endpoint added outside `/auth/` would have kept its
+`jwt-headers` exemption, lost its `session-resolver` one, and returned
+`401` to any browser still carrying a cookie — with no test going red.
 
 ## The four flows
 
@@ -197,13 +227,15 @@ silent pass with a stale token.
 
 ## The `v1:` Valkey contract
 
-**Owner: `auth-bff`.** This plugin only ever reads `v1:session:{sid}`
-(`HMGET`), renews its idle TTL (`EXPIRE`), and deletes it once
-(`DEL`, on `abs_exp` expiry or refresh failure). It never writes
-`v1:kcsid:{kc_sid}`, `v1:lock:refresh:{sid}`, or `v1:logout_jti:{jti}`, and
-never decrypts the `*_enc` fields. Changing the shape of this contract means
-introducing `v2:` in parallel and migrating — never mutating `v1` in place —
-and any change on either side must be coordinated with `auth-bff`.
+**Owner: `auth-bff`**, with one exception spelled out below. This plugin
+only ever reads `v1:session:{sid}` (`HMGET`), renews its idle TTL
+(`EXPIRE`), and deletes it once (`DEL`, on `abs_exp` expiry or refresh
+failure). It never writes `v1:kcsid:{kc_sid}` or `v1:logout_jti:{jti}`, and
+never decrypts the `*_enc` fields. **It does write
+`v1:lock:refresh:{sid}`** — that key is the plugin's, not `auth-bff`'s (see
+below). Changing the shape of this contract means introducing `v2:` in
+parallel and migrating — never mutating `v1` in place — and any change on
+either side must be coordinated with `auth-bff`.
 
 ### `v1:session:{sid}` (hash)
 
@@ -223,13 +255,52 @@ The plugin issues a single `HMGET access_token sub exp abs_exp` per request
 that needs resolving. It cannot read the refresh token: a compromised edge
 yields short-lived access tokens, not the ability to mint new ones.
 
-### Auxiliary keys (all owned and written by `auth-bff`)
+### Required write ordering on refresh (a MUST for `auth-bff`)
+
+**`auth-bff` MUST persist the rewritten `v1:session:{sid}` hash — with an
+`exp` strictly greater than the one it replaced — *before* it responds
+`200` to `POST /internal/sessions/{sid}/refresh`.** Writing after
+responding, or responding with an `exp` equal to the previous one, breaks
+the gateway side even though the winner's own request succeeds.
+
+Why: only one concurrent request per session wins the refresh lock and
+calls `auth-bff`. Every other request for the same session polls
+`v1:session:{sid}` until `exp` is strictly greater than the value it
+observed before deciding a refresh was needed
+(`waitForOtherRefresh`, `plugins/session-resolver/refresh.go`). That is the
+only signal a loser has that the refresh finished — "`exp` is in the
+future" is already true before any refresh, because this plugin refreshes
+proactively while the token is still valid. If the hash lands after the
+`200`, or never advances `exp`, every loser polls until `maxWait` and then
+answers `503` while the winner gets a perfectly good token: a burst of
+failures under concurrency only, invisible in single-request testing.
+
+### Auxiliary keys
+
+Written by `auth-bff`:
 
 ```
 v1:kcsid:{kc_sid}      → sid     reverse index for backchannel logout
-v1:lock:refresh:{sid}  → "1"     SETNX, TTL 5s, refresh stampede guard
 v1:logout_jti:{jti}    → "1"     logout token replay guard, TTL = token exp
 ```
+
+Written by **this plugin**:
+
+```
+v1:lock:refresh:{sid}  → <opaque token>   SET NX EX, refresh stampede guard
+```
+
+**`v1:lock:refresh:{sid}` is the plugin's key, and `auth-bff` must not
+delete it blindly.** The plugin acquires it with `SET NX EX` whose value is
+a random 16-byte token unique to that acquisition, and releases it with a
+compare-and-delete (a Lua `GET`-then-`DEL`, atomic) that removes the key
+only while it still holds that exact token — see `acquire` and `release` in
+`plugins/session-resolver/refresh.go`. The value is opaque: never `"1"`,
+never anything to match on. A plain `DEL` from the other side would drop a
+lock this plugin currently holds, letting a second refresh start for the
+same session while the first is still in flight; with Keycloak refresh
+token rotation, two concurrent refreshes for one session can invalidate it
+outright and log the user out.
 
 **`v1:kcsid:{kc_sid}` must never be touched by this plugin.** Its TTL runs to
 the session's `abs_exp`, set once by `auth-bff` at login — a deliberately
@@ -256,8 +327,34 @@ security regression, not a flaky test.
 | `SESSION_COOKIE_NAME` | `session.json` → plugin | `sid` | Must be `__Host-sid` wherever TLS terminates at the edge (the `__Host-` prefix requires HTTPS, no `Domain`, `Path=/`); `sid` is the development-only name because `__Host-` cookies do not work over `http://localhost:8090`. |
 | `AUTH_BFF_REFRESH_URL` | `session.json` → plugin | `http://auth-bff:8086/internal/sessions/{sid}/refresh` | Must contain the literal `{sid}` placeholder or the gateway refuses to start. |
 | `INTERNAL_SHARED_SECRET` | `session.json` → plugin | **required, no default** (`docker-compose.yml` fails fast with `:?internal shared secret is required`) | Sent as `X-Internal-Secret` on every refresh call to `auth-bff`. Rotate it on both sides together. |
+| `SESSION_ALLOWED_ORIGINS` | `krakend.tmpl` → plugin | `session.json`'s `allowed_origins` (`http://localhost:5173`) | Comma-separated. The CSRF allow-list for mutating cookie requests: an `Origin` (or `Referer` scheme+host) outside it is a `403`. Must list the real front-end origin in every non-development environment. |
+| `CORS_ALLOW_ORIGINS` | `krakend.tmpl` → `security/cors` | `cors.json`'s `allow_origins` (`http://localhost:5173`) | Comma-separated. Not read by the plugin, but a browser cannot send the cookie at all unless the origin is allowed here *and* `allow_credentials` is true. Keep it consistent with `SESSION_ALLOWED_ORIGINS`. |
 | `AUTH_BFF_HOST` | `hosts.json` → the `/auth/*` route backends | `http://host.docker.internal:8086` | Where the gateway proxies the public OIDC routes. Not read by the plugin itself — the plugin talks to `auth-bff`'s `/internal` endpoint directly via `AUTH_BFF_REFRESH_URL`, never through the gateway's own routing. |
 | `KEYCLOAK_ISSUER` / `KEYCLOAK_JWKS_URL` | `jwt.json` (`jwt-headers` plugin) | `http://localhost:8083/realms/forgeos` / `http://host.docker.internal:8083/...` | Not consumed by `session-resolver` itself, but the bearer it injects is only as good as `jwt-headers`'s ability to validate it against these. **`config/krakend.tmpl` does not currently read these two env vars** — `jwt-headers`'s `jwks_url`/`issuer` are rendered straight from `config/settings/jwt.json`, unlike every other secret/URL in this file. Pointing at a different Keycloak (a different port, a different realm) means editing `jwt.json` directly, not exporting the env var, until that gap is closed. |
+
+## The published image renders its config at run time
+
+The image built by the root `Dockerfile` ships `config/` (the template and
+its settings) and renders it on start with `FC_ENABLE=1` — the same
+Flexible-Configuration path `docker compose` uses — rather than shipping a
+`krakend.json` rendered at build time. That matters for everything in the
+table above: a config baked at build time freezes every `env "..."` lookup
+to whatever the *builder* had, which is nothing. `internal_secret` and
+`valkey_password` render as `""`, and per the failure-mode table an empty
+`internal_secret` leaves the gateway running with no session resolution at
+all.
+
+Consequences for whoever deploys it:
+
+- `INTERNAL_SHARED_SECRET` **must** be set in the container environment.
+  There is no default and there must never be one; it is also never passed
+  as a build argument, since that would write a live credential into an
+  image layer that anyone who can pull the image can read.
+- `VALKEY_PASSWORD`, `VALKEY_ADDR`, `AUTH_BFF_REFRESH_URL`,
+  `SESSION_ALLOWED_ORIGINS`, `CORS_ALLOW_ORIGINS` and the backend host
+  variables are all read at start, so one image serves every environment.
+- TLS keys are not in the image either (`tls.json` points at
+  `/etc/krakend/certs`); mount them.
 
 ## Failure modes — all fail closed
 
@@ -269,8 +366,9 @@ security regression, not a flaky test.
 | Cookie present but not a 43-character base64url value | `401`, no Valkey round-trip at all | Cheap rejection of garbage before it costs a network hop. |
 | `auth-bff` unreachable or errors during a needed refresh | `503` | The old token may already be stale or revoked; never forward it past its window on a guess. |
 | Mutating method (not in `csrf_safe_methods`) with a disallowed or absent `Origin`/`Referer` | `403` | CSRF: under `SameSite=Lax` the cookie can still ride along on some cross-site requests. |
-| Missing or invalid plugin configuration (`valkey_addr`, `cookie_name`, `internal_secret` empty, or `refresh_url` missing `{sid}`) | gateway refuses to start | Same posture as `jwt-headers` with invalid `skip_paths` — fail at boot, not at request time. |
+| Missing or invalid plugin configuration (`valkey_addr`, `cookie_name`, `internal_secret` empty, or `refresh_url` missing `{sid}`) | the plugin refuses to register; KrakenD logs the reason and **keeps serving without it** | `parseConfig` rejects the config at boot rather than degrading per-request — but note what KrakenD does with that rejection: it logs `[PLUGIN: Server] Error getting the plugin handler: [krakend-session-resolver] failed to parse config: ...` and starts anyway. Cookie traffic then gets `jwt-headers`' plain `401` (not fail-open, but not working either). Grep boot logs for that line before declaring a deploy healthy; the `"plugin loaded"` line for `krakend-session-resolver` is the positive signal. |
 | A caller supplies both a cookie and an `Authorization` header | The header wins, untouched | Dual mode: this is what keeps MCP, CI and mobile clients working unchanged. `jwt-headers` still validates whatever bearer arrives, so trusting it costs nothing. |
+| Any request on a path that is **not** in `skip_paths` | **Every** `Cookie` header is removed before the backend sees it — not only the session cookie | The session cookie is a credential a backend could replay to impersonate the session, and the plugin cannot tell which of several cookies is which without parsing and re-serialising the header. It drops the whole header on both the resolve path and the pass-through path (see `main.go`). Backends behind this gateway therefore receive no cookies at all except on skip paths, where `auth-bff` owns and reads the cookie directly. This is deliberate: a backend that stops seeing a cookie it used to see is this rule, not a bug. |
 
 ## Rollback
 
@@ -297,10 +395,21 @@ behave any differently than it did before this plugin was added.
   plugin and keeps working — MCP integrations, CI, and any client that
   already holds a JWT are unaffected by a Valkey incident. If the browser
   front is down and CI/MCP traffic is fine, check Valkey first.
+- **Every resolve logs an `outcome`.** Successes as well as failures:
+  `hit` (resolved from the store), `refreshed` (the request entered the
+  refresh path), and on the deny side `malformed_session`, `miss`,
+  `expired`, `csrf_reject`, `refresh_error`, `store_error`. A sudden
+  collapse in `hit` with no rise in any deny outcome means traffic is no
+  longer reaching the plugin at all — check the chain order and the
+  `"plugin loaded"` line before anything else. A `session idle ttl renewal
+  failed` warn means sessions will expire on their original idle TTL and
+  users will be logged out mid-session, even though requests still succeed.
 - **The `sid` in logs is never the session cookie value.** `session-resolver`
-  logs `sub`, path, method, status and a short outcome string
-  (`malformed_session`, `miss`, `expired`, `refresh_error`, ...) — never the
-  cookie, the sid, or a token. If a log line ever contains a 43-character
+  logs `sub`, path, method, status and a short outcome string — never the
+  cookie, the sid, or a token. Error paths log a fixed classification
+  (`timeout`, `unavailable`, `valkey_noauth`, `refresh_failed`, ...) rather
+  than raw driver text, which can quote the failing command and therefore
+  its key arguments. If a log line ever contains a 43-character
   base64url string next to `sid=`, that is a regression worth treating as a
   security incident, not a debugging convenience.
 - **`golang.org/x/sys` must stay pinned to match krakend-ce's build.** The
