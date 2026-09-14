@@ -248,13 +248,20 @@ Diseno y decisiones: [`docs/superpowers/specs/2026-08-03-krakend-config-generato
 
 ## Plugins
 
-El gateway utiliza 3 plugins custom registrados como HTTP server middleware:
+El gateway utiliza varios plugins custom registrados como HTTP server middleware:
 
 | Plugin | Descripcion | Settings |
 |--------|-------------|----------|
 | **trace-context** | Propaga headers W3C Traceparent/Tracestate. Genera trace IDs si no existen | `trace_context.json` |
 | **ip-resolver** | Resuelve IP del cliente a geolocalizacion (pais, ciudad, coordenadas) via ip-api.com con cache | `ip_resolver.json` |
+| **session-resolver** | Lee la sesion `v1:session:{sid}` de Valkey (escrita por `auth-bff`) y la convierte en `Authorization: Bearer` antes de `jwt-headers`. Bearer entrante siempre pasa sin tocar (modo dual browser/MCP/CI) | `session.json` |
 | **jwt-headers** | Valida JWT contra JWKS de Keycloak y mapea claims a headers HTTP (x-username, x-user-roles, x-user-id) | `jwt.json` |
+
+`session-resolver` implementa el patron Token Handler / BFF: el navegador solo
+ve una cookie `HttpOnly`, nunca el JWT. Orden de cadena, los cuatro flujos
+(login, request autenticado, refresh perezoso, logout), el contrato de
+Valkey y el runbook completo estan en
+[`docs/session-flow.md`](docs/session-flow.md).
 
 ### Habilitar / Deshabilitar plugins
 
@@ -535,7 +542,7 @@ CORS actual: `allow_headers: ["*"]` — el gateway acepta **cualquier header del
 
 La configuracion usa [KrakenD Flexible Configuration](https://www.krakend.io/docs/configuration/flexible-config/). Cada fichero `.json` en `settings/` se convierte en un namespace de variables en el template.
 
-Ficheros disponibles: `service.json`, `hosts.json`, `cors.json`, `jwt.json`, `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
+Ficheros disponibles: `service.json`, `hosts.json`, `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
 
 ### Servicios backend
 
