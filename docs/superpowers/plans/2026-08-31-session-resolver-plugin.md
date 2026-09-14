@@ -726,7 +726,7 @@ func startValkey(t *testing.T) string {
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "valkey/valkey:8-alpine",
+			Image:        "valkey/valkey:9-alpine",
 			ExposedPorts: []string{"6379/tcp"},
 			WaitingFor:   wait.ForListeningPort("6379/tcp"),
 		},
@@ -2014,7 +2014,7 @@ git commit -m "feat(gateway): public auth-bff routes for the session flows"
 
 ```yaml
   valkey:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:9-alpine
     container_name: forgeos-gw-valkey
     # appendonly no is deliberate: session tokens must not reach disk.
     command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:-devpassword}", "--appendonly", "no"]
