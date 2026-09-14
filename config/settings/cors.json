@@ -1,8 +1,8 @@
 {
   "allow_origins": ["http://localhost:5173"],
   "allow_methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  "allow_headers": ["Origin", "Authorization", "Content-Type", "Accept", "Accept-Language", "X-Organization-Id", "Idempotency-Key", "Traceparent", "Tracestate", "Trace-Id"],
-  "expose_headers": ["Content-Length", "Content-Type", "Traceparent", "Tracestate", "Trace-Id"],
+  "allow_headers": ["Origin", "Authorization", "Content-Type", "Accept", "Accept-Language", "X-Organization-Id", "Idempotency-Key", "Traceparent", "Tracestate", "Trace-Id", "Mcp-Session-Id", "Mcp-Protocol-Version", "Last-Event-ID"],
+  "expose_headers": ["Content-Length", "Content-Type", "Traceparent", "Tracestate", "Trace-Id", "Mcp-Session-Id"],
   "max_age": "12h",
   "allow_credentials": false
 }

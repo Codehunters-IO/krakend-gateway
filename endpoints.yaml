@@ -31,10 +31,32 @@ x-header-sets:
     - Tracestate
     - X-Traceparent
 
+  # MCP Streamable HTTP: identity claims plus the protocol/session headers the
+  # transport needs (Mcp-Session-Id round-trips, Last-Event-ID resumes a stream).
+  mcp: &mcp
+    - Accept
+    - Content-Type
+    - Authorization
+    - Mcp-Session-Id
+    - Mcp-Protocol-Version
+    - Last-Event-ID
+    - x-user-id
+    - x-user-roles
+    - x-username
+    - x-org-slug
+    - X-Organization-Id
+    - x-ip
+    - Traceparent
+    - Tracestate
+    - X-Traceparent
+
 backends:
   forgeos:
     host_default: http://host.docker.internal:8080
     host_env: FORGEOS_HOST
+  knowledge:
+    host_default: http://host.docker.internal:8085
+    host_env: KNOWLEDGE_MCP_HOST
 
 defaults:
   output_encoding: no-op
@@ -156,4 +178,65 @@ endpoints:
     auth: protected
     timeout: 3600s
     disable_host_sanitize: true
+    input_headers: *identity
+
+  # Knowledge catalog MCP (spring-ai-qdrant-mcp) — Streamable HTTP transport.
+  # One block per method: POST carries JSON-RPC, GET is the long-lived server
+  # stream, DELETE terminates the session.
+  - path: /mcp
+    method: POST
+    backend: knowledge
+    auth: protected
+    timeout: 120s
+    disable_host_sanitize: true
+    input_headers: *mcp
+
+  - path: /mcp
+    method: GET
+    backend: knowledge
+    auth: protected
+    timeout: 3600s
+    disable_host_sanitize: true
+    input_headers: *mcp
+
+  - path: /mcp
+    method: DELETE
+    backend: knowledge
+    auth: protected
+    timeout: 30s
+    input_headers: *mcp
+
+  # REST surface of the same use cases, for non-MCP clients.
+  - path: /api/v1/search
+    method: POST
+    backend: knowledge
+    auth: protected
+    timeout: 60s
+    input_headers: *identity
+
+  # Ingest accepts up to 4MB and runs chunking plus embeddings inline.
+  - path: /api/v1/documents
+    method: POST
+    backend: knowledge
+    auth: protected
+    timeout: 300s
+    input_headers: *identity
+
+  - path: /api/v1/memories
+    method: POST
+    backend: knowledge
+    auth: protected
+    timeout: 60s
+    input_headers: *identity
+
+  - path: /api/v1/collections
+    method: GET
+    backend: knowledge
+    auth: protected
+    input_headers: *identity
+
+  - path: /api/v1/projects
+    method: GET
+    backend: knowledge
+    auth: protected
     input_headers: *identity

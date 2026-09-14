@@ -18,6 +18,8 @@ services:
       - FC_OUT=/tmp/krakend.json
       # ForgeOS backend (default in hosts.json). Override to retarget.
       - FORGEOS_HOST=${FORGEOS_HOST:-http://host.docker.internal:8080}
+      # Knowledge catalog (MCP + REST).
+      - KNOWLEDGE_MCP_HOST=${KNOWLEDGE_MCP_HOST:-http://host.docker.internal:8085}
       # Keycloak forgeos realm. issuer must equal the token `iss`; JWKS resolved from inside the container.
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-http://localhost:8083/realms/forgeos}
       - KEYCLOAK_JWKS_URL=${KEYCLOAK_JWKS_URL:-http://host.docker.internal:8083/realms/forgeos/protocol/openid-connect/certs}
