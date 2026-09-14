@@ -17,6 +17,7 @@
 - Go `1.25.7`, matching the other plugins and the builder image.
 - Plugin name: `krakend-session-resolver`. Config key under `extra_config."plugin/http-server"` uses that exact name.
 - Redis key prefix `v1:`. Hash `v1:session:{sid}` with fields `ver, sub, kc_sid, access_token, exp, abs_exp, refresh_token_enc, id_token_enc, created_at`. The plugin reads only `access_token, exp, abs_exp, sub` and **must never** read the `_enc` fields.
+- **The plugin renews the TTL of `v1:session:{sid}` and of that key ONLY.** It must never touch the TTL of the reverse index `v1:kcsid:{kc_sid}`. `auth-bff` deliberately writes that index with a TTL running to the session's `abs_exp` rather than to the idle window, precisely so the index outlives every idle-TTL cycle. Renewing it here with `idle_ttl_seconds` would not extend anything — it would *shorten* it, collapsing a ceiling-length TTL back to 30 minutes on every renewal, and the index would then expire while the session is still alive. The consequence is silent and severe: `auth-bff` resolves backchannel logout through that index, so once it is gone Keycloak's logout callback finds nothing, no-ops, and returns **200 OK** while the session keeps authenticating requests at this edge until its ceiling. Backchannel revocation fails open and reports success. This is not a style rule — it is the one cross-repo invariant this plugin can break without any test in either repository going red.
 - `sid` is exactly 43 base64url characters (`[A-Za-z0-9_-]`).
 - Every failure path fails closed: 401 or 503, never "pass through unauthenticated".
 - Never log the `sid`, the cookie value, or any token. Log `sub`, path, and outcome.
@@ -834,6 +835,18 @@ func TestStoreRenewIdleOnlyBelowHalf(t *testing.T) {
 	if ttl := client.TTL(ctx, key).Val(); ttl < 29*time.Minute {
 		t.Errorf("ttl = %v, expected it renewed to ~30m", ttl)
 	}
+
+	// The reverse index belongs to auth-bff and carries a TTL running to
+	// abs_exp. Renewal must not shorten it to the idle window: if it does, the
+	// index expires under a live session and backchannel logout silently
+	// no-ops while answering Keycloak 200 OK. Nothing else in either
+	// repository catches that, so it is asserted here.
+	index := "v1:kcsid:kc-1"
+	client.Set(ctx, index, sid, 10*time.Hour)
+	s.renewIdle(ctx, sid)
+	if ttl := client.TTL(ctx, index).Val(); ttl < 9*time.Hour {
+		t.Errorf("kcsid index ttl = %v, want it left near 10h — renewIdle must not touch the index", ttl)
+	}
 }
 
 func TestStoreDrop(t *testing.T) {
@@ -930,6 +943,12 @@ func (s *store) load(ctx context.Context, sid string) (*sessionData, error) {
 
 // renewIdle extends the key's TTL only once less than half of it remains, so an
 // active session costs one write every ~15 minutes instead of one per request.
+//
+// It touches v1:session:{sid} and nothing else. The reverse index
+// v1:kcsid:{kc_sid} is auth-bff's to manage and carries a TTL that runs to the
+// session's abs_exp; applying the idle TTL to it here would shorten it on every
+// renewal, letting it expire under a live session and silently breaking
+// backchannel logout — which would then no-op and answer Keycloak 200 OK.
 func (s *store) renewIdle(ctx context.Context, sid string) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
