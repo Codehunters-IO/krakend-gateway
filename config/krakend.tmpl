@@ -113,7 +113,19 @@
         "internal_secret": "{{ env "INTERNAL_SHARED_SECRET" | default "" }}",
         "allowed_origins": {{ env "SESSION_ALLOWED_ORIGINS" | default (join "," .session.allowed_origins) | splitList "," | marshal }},
         "csrf_safe_methods": {{ marshal .session.csrf_safe_methods }},
-        "skip_paths": {{ marshal .session.skip_paths }}
+        {{/* skip_paths is DERIVED from the same endpoint spec jwt-headers
+             derives its own from (see the block below), plus whatever extra
+             literals session.json lists. Hand-maintaining a second list here
+             meant the two adjacent plugins could silently disagree about
+             which paths are public: the first public endpoint added outside
+             /auth/ would keep its jwt-headers exemption but lose its
+             session-resolver one, and a browser carrying a stale cookie
+             would get a 401 on a route that is supposed to be open, with
+             nothing going red. One source of truth instead:
+             endpoints.yaml -> endpoints.json -> both plugins. */}}
+        {{- $sessionSkip := .session.skip_paths }}
+        {{- range .endpoints.endpoints }}{{ if eq .auth "public" }}{{ $sessionSkip = append $sessionSkip (regexReplaceAll "\\{[^}]+\\}" .path "*") }}{{ end }}{{ end }}
+        "skip_paths": {{ marshal $sessionSkip }}
       }{{ if $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $jwtEnabled }}

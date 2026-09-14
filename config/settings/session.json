@@ -12,5 +12,5 @@
   "refresh_lock_ttl_seconds": 5,
   "allowed_origins": ["http://localhost:5173"],
   "csrf_safe_methods": ["GET", "HEAD", "OPTIONS"],
-  "skip_paths": ["/auth/*", "/api/ping"]
+  "skip_paths": []
 }
