@@ -50,6 +50,20 @@ x-header-sets:
     - Tracestate
     - X-Traceparent
 
+  # The OIDC flow and the session endpoints. Cookie is the point: auth-bff reads
+  # __Host-sid on /auth/session and /auth/logout, and Spring stores the
+  # authorization request (state + PKCE verifier) in its own HTTP session, so
+  # JSESSIONID must survive the hop from /auth/login to /auth/callback or state
+  # validation fails. No identity headers: the jwt-headers plugin skips these
+  # routes, so there is nothing to inject.
+  auth: &auth
+    - Accept
+    - Content-Type
+    - Cookie
+    - Traceparent
+    - Tracestate
+    - X-Traceparent
+
 backends:
   forgeos:
     host_default: http://host.docker.internal:8080
@@ -57,6 +71,9 @@ backends:
   knowledge:
     host_default: http://host.docker.internal:8085
     host_env: KNOWLEDGE_MCP_HOST
+  auth_bff:
+    host_default: http://host.docker.internal:8086
+    host_env: AUTH_BFF_HOST
 
 defaults:
   output_encoding: no-op
@@ -64,6 +81,64 @@ defaults:
   timeout: null
 
 endpoints:
+  # Edge authentication (auth-bff). Every route here is `public` in the gateway's
+  # sense — it lands in the JWT plugin's skip_paths — because this IS the flow
+  # that issues the credential. There is no token to validate yet.
+  #
+  # /internal/sessions/{sid}/refresh is deliberately NOT routed: the
+  # session-resolver plugin calls auth-bff directly, and that endpoint hands out
+  # access tokens behind nothing but a shared secret. Exposing it at the edge
+  # would put an access-token oracle on the public internet.
+  - path: /auth/login/keycloak
+    method: GET
+    backend: auth_bff
+    auth: public
+    input_headers: *auth
+
+  # Keycloak redirects the browser here with the authorization code. The query
+  # parameters must be declared explicitly or KrakenD drops them and the flow
+  # dies with a missing-code error that looks like a Keycloak fault.
+  - path: /auth/callback
+    method: GET
+    backend: auth_bff
+    auth: public
+    timeout: 10s
+    input_headers: *auth
+    input_query_strings:
+      - code
+      - state
+      - session_state
+      - iss
+      - error
+      - error_description
+
+  - path: /auth/session
+    method: GET
+    backend: auth_bff
+    auth: public
+    input_headers: *auth
+
+  - path: /auth/logout
+    method: POST
+    backend: auth_bff
+    auth: public
+    timeout: 10s
+    input_headers: *auth
+
+  # Keycloak calls this server-to-server with a signed logout_token; no browser,
+  # no cookie. Its authentication is the token signature, validated in auth-bff.
+  - path: /auth/backchannel-logout
+    method: POST
+    backend: auth_bff
+    auth: public
+    timeout: 10s
+    input_headers:
+      - Accept
+      - Content-Type
+      - Traceparent
+      - Tracestate
+      - X-Traceparent
+
   - path: /api/ping
     method: GET
     backend: forgeos

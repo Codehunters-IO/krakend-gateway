@@ -1,6 +1,122 @@
 {
   "endpoints": [
     {
+      "path": "/auth/login/keycloak",
+      "method": "GET",
+      "auth": "public",
+      "url_pattern": "/auth/login/keycloak",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "AUTH_BFF_HOST",
+      "host_default": "http://host.docker.internal:8086",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Content-Type",
+        "Cookie",
+        "Traceparent",
+        "Tracestate",
+        "X-Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "",
+      "rate_limit": null
+    },
+    {
+      "path": "/auth/callback",
+      "method": "GET",
+      "auth": "public",
+      "url_pattern": "/auth/callback",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "AUTH_BFF_HOST",
+      "host_default": "http://host.docker.internal:8086",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Content-Type",
+        "Cookie",
+        "Traceparent",
+        "Tracestate",
+        "X-Traceparent"
+      ],
+      "input_query_strings": [
+        "code",
+        "state",
+        "session_state",
+        "iss",
+        "error",
+        "error_description"
+      ],
+      "timeout": "10s",
+      "rate_limit": null
+    },
+    {
+      "path": "/auth/session",
+      "method": "GET",
+      "auth": "public",
+      "url_pattern": "/auth/session",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "AUTH_BFF_HOST",
+      "host_default": "http://host.docker.internal:8086",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Content-Type",
+        "Cookie",
+        "Traceparent",
+        "Tracestate",
+        "X-Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "",
+      "rate_limit": null
+    },
+    {
+      "path": "/auth/logout",
+      "method": "POST",
+      "auth": "public",
+      "url_pattern": "/auth/logout",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "AUTH_BFF_HOST",
+      "host_default": "http://host.docker.internal:8086",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Content-Type",
+        "Cookie",
+        "Traceparent",
+        "Tracestate",
+        "X-Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "10s",
+      "rate_limit": null
+    },
+    {
+      "path": "/auth/backchannel-logout",
+      "method": "POST",
+      "auth": "public",
+      "url_pattern": "/auth/backchannel-logout",
+      "output_encoding": "no-op",
+      "encoding": "no-op",
+      "host_env": "AUTH_BFF_HOST",
+      "host_default": "http://host.docker.internal:8086",
+      "disable_host_sanitize": false,
+      "input_headers": [
+        "Accept",
+        "Content-Type",
+        "Traceparent",
+        "Tracestate",
+        "X-Traceparent"
+      ],
+      "input_query_strings": [],
+      "timeout": "10s",
+      "rate_limit": null
+    },
+    {
       "path": "/api/ping",
       "method": "GET",
       "auth": "public",

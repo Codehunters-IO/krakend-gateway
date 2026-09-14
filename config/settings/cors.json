@@ -4,5 +4,5 @@
   "allow_headers": ["Origin", "Authorization", "Content-Type", "Accept", "Accept-Language", "X-Organization-Id", "Idempotency-Key", "Traceparent", "Tracestate", "Trace-Id", "Mcp-Session-Id", "Mcp-Protocol-Version", "Last-Event-ID"],
   "expose_headers": ["Content-Length", "Content-Type", "Traceparent", "Tracestate", "Trace-Id", "Mcp-Session-Id"],
   "max_age": "12h",
-  "allow_credentials": false
+  "allow_credentials": true
 }
