@@ -106,7 +106,7 @@
         "claims_to_headers": {{ marshal .jwt.claims_to_headers }},
         "skip_paths": [
           {{- range $i, $p := .jwt.skip_paths }}{{ if $i }},{{ end }}"{{ $p }}"{{ end }}
-          {{- range .endpoints.endpoints }}{{ if eq .auth "public" }},"{{ .path }}"{{ end }}{{ end }}
+          {{- range .endpoints.endpoints }}{{ if eq .auth "public" }},"{{ regexReplaceAll "\\{[^}]+\\}" .path "*" }}"{{ end }}{{ end }}
         ],
         "required_claims": {{ marshal .jwt.required_claims }},
         "roles_claim": "{{ .jwt.roles_claim }}",
