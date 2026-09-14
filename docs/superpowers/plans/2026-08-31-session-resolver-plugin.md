@@ -6,7 +6,7 @@
 
 **Architecture:** A Go plugin in `plugins/session-resolver/`, its own module like the five existing plugins. It runs immediately before `krakend-jwt-headers` in the `plugin/http-server` chain, so `jwt-headers` and every backend stay unchanged. The plugin only reads Valkey; the `auth-bff` service (separate plan) is the only writer.
 
-**Tech Stack:** Go 1.25.7, `valkey-io/valkey-go` `v1.0.77` (native Valkey client: command-builder pattern with typed result accessors, automatic pipelining), `testcontainers-go` for integration tests, KrakenD 2.13.4, Docker builder image `krakend/builder:2.13.4`. Target server: Valkey `8.1.10` — a wire-compatible fork of Redis 7.2.4.
+**Tech Stack:** Go 1.25.7, `valkey-io/valkey-go` `v1.0.77` (native Valkey client: command-builder pattern with typed result accessors, automatic pipelining), `testcontainers-go` for integration tests, KrakenD 2.13.4, Docker builder image `krakend/builder:2.13.4`. Target server: Valkey `9.1.2` — a wire-compatible fork of Redis 7.2.4.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-token-handler-bff-design.md`
 

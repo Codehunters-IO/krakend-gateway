@@ -1,10 +1,10 @@
 {
   "endpoints": [
     {
-      "path": "/auth/login/keycloak",
+      "path": "/auth/login/{provider}",
       "method": "GET",
       "auth": "public",
-      "url_pattern": "/auth/login/keycloak",
+      "url_pattern": "/auth/login/{provider}",
       "output_encoding": "no-op",
       "encoding": "no-op",
       "host_env": "AUTH_BFF_HOST",
@@ -20,7 +20,11 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": {
+        "max_rate": 20,
+        "client_max_rate": 5,
+        "strategy": "ip"
+      }
     },
     {
       "path": "/auth/callback",
@@ -49,7 +53,11 @@
         "error_description"
       ],
       "timeout": "10s",
-      "rate_limit": null
+      "rate_limit": {
+        "max_rate": 20,
+        "client_max_rate": 5,
+        "strategy": "ip"
+      }
     },
     {
       "path": "/auth/session",

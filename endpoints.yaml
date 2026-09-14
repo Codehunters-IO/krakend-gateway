@@ -89,11 +89,15 @@ endpoints:
   # session-resolver plugin calls auth-bff directly, and that endpoint hands out
   # access tokens behind nothing but a shared secret. Exposing it at the edge
   # would put an access-token oracle on the public internet.
-  - path: /auth/login/keycloak
+  - path: /auth/login/{provider}
     method: GET
     backend: auth_bff
     auth: public
     input_headers: *auth
+    rate_limit:
+      max_rate: 20
+      client_max_rate: 5
+      strategy: ip
 
   # Keycloak redirects the browser here with the authorization code. The query
   # parameters must be declared explicitly or KrakenD drops them and the flow
@@ -111,6 +115,10 @@ endpoints:
       - iss
       - error
       - error_description
+    rate_limit:
+      max_rate: 20
+      client_max_rate: 5
+      strategy: ip
 
   - path: /auth/session
     method: GET
