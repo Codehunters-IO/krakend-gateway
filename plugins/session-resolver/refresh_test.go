@@ -156,6 +156,14 @@ func TestRefresh(t *testing.T) {
 // returns a token with no refresh occurring, and it is what makes the
 // late-caller case in TestRefresh correct. Nothing exercised it
 // deliberately before this test.
+//
+// Proving the lock was never TOUCHED needs a different signal than an
+// EXISTS check on the lock key: release() deletes that key on the normal
+// winner path too, so EXISTS reads 0 whether the short-circuit avoided the
+// lock entirely or the code acquired it, called auth-bff, and released it
+// — both leave nothing behind. onAcquireAttempt fires at the very start of
+// acquire(), win or lose, so it is the one signal that actually
+// distinguishes "never touched the lock" from "touched and cleaned up".
 func TestRefreshSkipsAuthBffWhenAlreadyFresh(t *testing.T) {
 	addr := startValkey(t)
 	sid := "R123456789012345678901234567890123456789012"
@@ -180,6 +188,9 @@ func TestRefreshSkipsAuthBffWhenAlreadyFresh(t *testing.T) {
 	}
 	r := newRefresher(cfg, s)
 
+	var acquireAttempts atomic.Int32
+	r.onAcquireAttempt = func() { acquireAttempts.Add(1) }
+
 	token, err := r.refresh(context.Background(), sid, now+5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -190,13 +201,8 @@ func TestRefreshSkipsAuthBffWhenAlreadyFresh(t *testing.T) {
 	if got := calls.Load(); got != 0 {
 		t.Errorf("auth-bff called %d times, want 0 — an already-fresh session must short-circuit before the lock or the HTTP call", got)
 	}
-
-	n, err := s.client.Do(context.Background(), s.client.B().Exists().Key("v1:lock:refresh:"+sid).Build()).AsInt64()
-	if err != nil {
-		t.Fatalf("EXISTS failed: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("a refresh lock was created even though the short-circuit should have avoided it entirely")
+	if got := acquireAttempts.Load(); got != 0 {
+		t.Errorf("acquire attempted %d times, want 0 — the short-circuit must avoid the lock entirely, not merely release it afterward", got)
 	}
 }
 
@@ -237,6 +243,157 @@ func TestRefreshRejectsInvalidObservedExp(t *testing.T) {
 	}
 	if got := calls.Load(); got != 0 {
 		t.Errorf("auth-bff called %d times, want 0 — an invalid observedExp must fail before the HTTP call", got)
+	}
+}
+
+// TestRefreshWinnerRechecksBeforeCallingAuthBff pins the winner-side
+// re-check in refresh() — deleting that block leaves the whole suite
+// green, since TestRefresh's winner is the first refresher and only ever
+// sees fresh.Exp == observedExp (never >), TestRefreshSkipsAuthBffWhenAlreadyFresh
+// short-circuits before ever acquiring the lock, and every other test has
+// a single caller. None of them can exercise the fresh.Exp > observedExp
+// branch after acquiring.
+//
+// There is no I/O boundary inside refresh() between winning the lock and
+// the re-check load to race a goroutine against — both are Valkey calls
+// executed back-to-back within one synchronous call, so no external
+// scheduling could land a write in that window on any reliable schedule.
+// afterAcquire is the seam that makes the window reachable deterministically:
+// it runs exactly once, synchronously, at exactly that point.
+func TestRefreshWinnerRechecksBeforeCallingAuthBff(t *testing.T) {
+	addr := startValkey(t)
+	sid := "T123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	client := seed(t, addr, sid, now+5, now+36000)
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token":"should-not-be-called"}`))
+	}))
+	defer server.Close()
+
+	cfg := refreshConfig(addr, server.URL)
+	s, err := newStore(cfg)
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	r := newRefresher(cfg, s)
+
+	observedExp := now + 5
+	r.afterAcquire = func() {
+		// Simulate a concurrent caller's refresh completing in the window
+		// between this caller winning the lock and re-checking freshness —
+		// exactly the race the winner-side re-check exists to close.
+		hset := client.B().Hset().Key("v1:session:"+sid).FieldValue().
+			FieldValue("access_token", "concurrent.fresh.jwt").
+			FieldValue("exp", strconv.FormatInt(now+9000, 10)).
+			Build()
+		if err := client.Do(context.Background(), hset).Error(); err != nil {
+			t.Fatalf("injected write failed: %v", err)
+		}
+	}
+
+	token, err := r.refresh(context.Background(), sid, observedExp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "concurrent.fresh.jwt" {
+		t.Errorf("token = %q, want concurrent.fresh.jwt — the winner-side re-check must observe the write injected between acquire and the HTTP call", token)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("auth-bff called %d times, want 0 — the winner-side re-check must skip the HTTP call once it sees the injected write", got)
+	}
+}
+
+// TestNewRefresherDerivesMaxWaitFromRefreshTimeout pins that maxWait tracks
+// RefreshTimeoutMs rather than a hardcoded constant — nothing else in the
+// suite would notice a revert to the old fixed 500ms, since every test
+// configures RefreshTimeoutMs=2000 and none asserts on the derived value
+// directly. No Valkey container needed: newStore tolerates an unreachable
+// address at construction time (ForceSingleClient), so this runs as a
+// plain unit test.
+func TestNewRefresherDerivesMaxWaitFromRefreshTimeout(t *testing.T) {
+	s, err := newStore(&pluginConfig{ValkeyAddr: "127.0.0.1:1", KeyPrefix: "v1:", ValkeyTimeoutMs: 300})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	cfg := &pluginConfig{RefreshTimeoutMs: 1234, RefreshLockTTLSeconds: 5}
+	r := newRefresher(cfg, s)
+
+	wantMin := time.Duration(cfg.RefreshTimeoutMs)*time.Millisecond + s.timeout
+	if r.maxWait <= wantMin {
+		t.Errorf("maxWait = %v, want strictly greater than RefreshTimeoutMs+store.timeout (%v) — it must track RefreshTimeoutMs, not a fixed constant", r.maxWait, wantMin)
+	}
+	if r.maxWait == 500*time.Millisecond {
+		t.Errorf("maxWait = %v — looks like it reverted to the old hardcoded 500ms", r.maxWait)
+	}
+}
+
+// TestRefreshRejectsEmptyStoredAccessToken pins tokenOrErr, shared by all
+// three paths that return a token read from the store rather than from
+// auth-bff's own response (the pre-lock short-circuit, the winner-side
+// re-check, and waitForOtherRefresh). Exercised here via the pre-lock
+// short-circuit, the simplest of the three to reach directly.
+func TestRefreshRejectsEmptyStoredAccessToken(t *testing.T) {
+	addr := startValkey(t)
+	sid := "U123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:       []string{addr},
+		ForceSingleClient: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to connect to valkey: %v", err)
+	}
+	defer client.Close()
+
+	key := "v1:session:" + sid
+	hset := client.B().Hset().Key(key).FieldValue().
+		FieldValue("ver", "1").
+		FieldValue("sub", "user-1").
+		FieldValue("kc_sid", "kc-1").
+		FieldValue("access_token", ""). // corrupted/incomplete write
+		FieldValue("exp", strconv.FormatInt(now+9000, 10)).
+		FieldValue("abs_exp", strconv.FormatInt(now+36000, 10)).
+		FieldValue("refresh_token_enc", "k1.iv.cipher").
+		FieldValue("id_token_enc", "k1.iv.cipher").
+		FieldValue("created_at", "0").
+		Build()
+	if err := client.Do(context.Background(), hset).Error(); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	if err := client.Do(context.Background(), client.B().Expire().Key(key).Seconds(1800).Build()).Error(); err != nil {
+		t.Fatalf("expire failed: %v", err)
+	}
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := refreshConfig(addr, server.URL)
+	s, err := newStore(cfg)
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	r := newRefresher(cfg, s)
+
+	// observedExp far below the stored (advanced) Exp, so this drives the
+	// pre-lock short-circuit straight into tokenOrErr.
+	token, err := r.refresh(context.Background(), sid, now+5)
+	if err == nil {
+		t.Fatalf("expected an error for an empty stored access token, got token %q with nil error", token)
+	}
+	if token != "" {
+		t.Errorf("token = %q, want empty alongside the error", token)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("auth-bff called %d times, want 0", got)
 	}
 }
 

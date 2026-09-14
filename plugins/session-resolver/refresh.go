@@ -47,6 +47,25 @@ type refresher struct {
 	timeout  time.Duration
 	waitStep time.Duration
 	maxWait  time.Duration
+
+	// afterAcquire and onAcquireAttempt are test-only seams, nil (no-op) in
+	// production. There is no I/O boundary between a caller winning the
+	// lock and its post-acquire re-check load — both are Valkey calls
+	// inside one synchronous call to refresh(), so no external goroutine
+	// can land a write inside that window on any reliable schedule. These
+	// let tests observe or act at those two exact points instead.
+	//
+	// afterAcquire runs once, synchronously, right after this caller wins
+	// the lock and before the re-check load — tests use it to inject a
+	// write simulating a concurrent refresh finishing in that window.
+	//
+	// onAcquireAttempt runs at the very start of every acquire() call, win
+	// or lose — tests use it to detect whether the lock was ever attempted
+	// at all, a fact EXISTS-after-release cannot recover: release deletes
+	// the lock whether it was won-then-released or never created, so both
+	// read back as 0.
+	afterAcquire     func()
+	onAcquireAttempt func()
 }
 
 func newRefresher(cfg *pluginConfig, s *store) *refresher {
@@ -60,12 +79,15 @@ func newRefresher(cfg *pluginConfig, s *store) *refresher {
 		lockTTL:  time.Duration(cfg.RefreshLockTTLSeconds) * time.Second,
 		timeout:  timeout,
 		waitStep: waitStep,
-		// A loser must not give up before the winner's own HTTP call would:
+		// A loser must not give up before the winner's true worst case:
 		// hardcoding this below RefreshTimeoutMs turned a slow-but-legitimate
 		// round trip into N-1 spurious 503s for a token that was still
-		// valid. waitStep on top so a poll fires shortly after the winner's
-		// own deadline would have been reached, rather than racing it.
-		maxWait: timeout + waitStep,
+		// valid. The winner's worst case is its post-acquire re-check load
+		// (bounded by s.timeout) followed by the HTTP call to auth-bff
+		// (bounded by timeout) — both must fit before a loser gives up.
+		// waitStep on top so a poll fires shortly after that deadline would
+		// have been reached, rather than racing it.
+		maxWait: timeout + s.timeout + waitStep,
 	}
 }
 
@@ -144,6 +166,10 @@ func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) 
 	// reaching here.
 	defer r.release(sid, token)
 
+	if r.afterAcquire != nil {
+		r.afterAcquire()
+	}
+
 	// Re-check against observedExp — the same external, shared baseline,
 	// not this caller's own earlier read — now that the lock is held. A
 	// caller can win a just-freed lock shortly after some other caller
@@ -191,6 +217,10 @@ func tokenOrErr(data *sessionData) (string, error) {
 // it acquired rather than one a later caller took after this one's TTL
 // expired.
 func (r *refresher) acquire(ctx context.Context, sid string) (bool, string, error) {
+	if r.onAcquireAttempt != nil {
+		r.onAcquireAttempt()
+	}
+
 	token, err := randomLockToken()
 	if err != nil {
 		return false, "", err
