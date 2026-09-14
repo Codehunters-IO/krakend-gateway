@@ -9,10 +9,13 @@ import (
 type action int
 
 const (
-	actionPassThrough action = iota // bearer present, skip path, or preflight
-	actionUnauthorized
+	// actionUnauthorized is the zero value on purpose: every path in decide
+	// returns explicitly today, but if a future branch is ever left
+	// unassigned, the default must deny rather than pass traffic through.
+	actionUnauthorized action = iota
 	actionForbidden
-	actionResolve // read Valkey and inject
+	actionResolve     // read Valkey and inject
+	actionPassThrough // bearer present, skip path, or preflight
 )
 
 type request struct {

@@ -68,6 +68,16 @@ func TestDecide(t *testing.T) {
 			want: actionUnauthorized,
 		},
 		{
+			name: "sid one character short of 43 is rejected",
+			req:  request{Path: "/api/projects", Method: "GET", Cookie: validSid[:42]},
+			want: actionUnauthorized,
+		},
+		{
+			name: "sid one character over 43 is rejected",
+			req:  request{Path: "/api/projects", Method: "GET", Cookie: validSid + "A"},
+			want: actionUnauthorized,
+		},
+		{
 			name:    "valid cookie on a safe method resolves",
 			req:     request{Path: "/api/projects", Method: "GET", Cookie: validSid},
 			want:    actionResolve,
@@ -110,5 +120,15 @@ func TestDecide(t *testing.T) {
 				t.Errorf("sid = %q, want %q", sid, tc.wantSid)
 			}
 		})
+	}
+}
+
+// TestZeroValueActionFailsClosed guards the enum ordering: the zero value of
+// action must be a deny, so that an uninitialized or partially-set action
+// variable never accidentally behaves like actionPassThrough.
+func TestZeroValueActionFailsClosed(t *testing.T) {
+	var zero action
+	if zero != actionUnauthorized {
+		t.Fatalf("zero value of action = %v, want actionUnauthorized (fail closed)", zero)
 	}
 }
