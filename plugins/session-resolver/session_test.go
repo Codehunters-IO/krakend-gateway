@@ -154,21 +154,26 @@ func TestStoreRenewIdleOnlyBelowHalf(t *testing.T) {
 		t.Errorf("ttl = %v, expected it left untouched near 30m", ttl)
 	}
 
-	// Drop below half: renewal must push it back to the full idle TTL.
+	// Seed the reverse index BEFORE the call that actually renews, and drop
+	// the session below half in the same step. This makes the one renewIdle
+	// call below the only invocation in this test where the EXPIRE branch
+	// fires — and it fires while the index exists, so the assertions below
+	// are a real exercise of the write path, not a vacuous no-op check.
+	//
+	// The index belongs to auth-bff and carries a TTL running to abs_exp.
+	// Renewal must not shorten it to the idle window: if it does, the index
+	// expires under a live session and backchannel logout silently no-ops
+	// while answering Keycloak 200 OK. Nothing else in either repository
+	// catches that, so it is asserted here.
+	index := "v1:kcsid:kc-1"
+	client.Do(ctx, client.B().Set().Key(index).Value(sid).Ex(10*time.Hour).Build())
 	client.Do(ctx, client.B().Expire().Key(key).Seconds(300).Build())
+
 	s.renewIdle(ctx, sid)
+
 	if ttl := ttlOf(t, client, key); ttl < 29*time.Minute {
 		t.Errorf("ttl = %v, expected it renewed to ~30m", ttl)
 	}
-
-	// The reverse index belongs to auth-bff and carries a TTL running to
-	// abs_exp. Renewal must not shorten it to the idle window: if it does, the
-	// index expires under a live session and backchannel logout silently
-	// no-ops while answering Keycloak 200 OK. Nothing else in either
-	// repository catches that, so it is asserted here.
-	index := "v1:kcsid:kc-1"
-	client.Do(ctx, client.B().Set().Key(index).Value(sid).Ex(10*time.Hour).Build())
-	s.renewIdle(ctx, sid)
 	if ttl := ttlOf(t, client, index); ttl < 9*time.Hour {
 		t.Errorf("kcsid index ttl = %v, want it left near 10h — renewIdle must not touch the index", ttl)
 	}
@@ -193,5 +198,66 @@ func TestStoreDrop(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("session key still exists after drop")
+	}
+}
+
+// TestStoreLoadWithMalformedExpiryFields pins the current, undocumented
+// behavior of asInt64: a non-numeric exp/abs_exp is swallowed and reported
+// as the zero value, indistinguishable from a legitimately parsed epoch 0.
+// load() returns no error for this — the corruption is silent at this layer.
+// This test exists so a future change to that behavior is a deliberate
+// decision with a red test to update, not an accident. It is NOT an
+// endorsement that zero is a safe sentinel in general — only a record of
+// what load() actually returns today, for Task 4's review to build on.
+func TestStoreLoadWithMalformedExpiryFields(t *testing.T) {
+	addr := startValkey(t)
+	sid := "F123456789012345678901234567890123456789012"
+	ctx := context.Background()
+
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:       []string{addr},
+		ForceSingleClient: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to connect to valkey: %v", err)
+	}
+	t.Cleanup(client.Close)
+
+	key := "v1:session:" + sid
+	hset := client.B().Hset().Key(key).FieldValue().
+		FieldValue("ver", "1").
+		FieldValue("sub", "user-1").
+		FieldValue("kc_sid", "kc-1").
+		FieldValue("access_token", "the.jwt").
+		FieldValue("exp", "not-a-number").
+		FieldValue("abs_exp", "also-not-a-number").
+		FieldValue("refresh_token_enc", "k1.iv.cipher").
+		FieldValue("id_token_enc", "k1.iv.cipher").
+		FieldValue("created_at", "0").
+		Build()
+	if err := client.Do(ctx, hset).Error(); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	s, err := newStore(&pluginConfig{ValkeyAddr: addr, KeyPrefix: "v1:", ValkeyTimeoutMs: 500, IdleTTLSeconds: 1800})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+
+	data, err := s.load(ctx, sid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected a session, got nil")
+	}
+	if data.AccessToken != "the.jwt" {
+		t.Errorf("access token = %q, want the.jwt", data.AccessToken)
+	}
+	if data.Exp != 0 {
+		t.Errorf("exp = %d, want 0 (malformed value silently zeroed by asInt64)", data.Exp)
+	}
+	if data.AbsExp != 0 {
+		t.Errorf("abs_exp = %d, want 0 (malformed value silently zeroed by asInt64)", data.AbsExp)
 	}
 }
