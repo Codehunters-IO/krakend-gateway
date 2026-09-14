@@ -39,24 +39,34 @@
   },
   "extra_config": {
     "plugin/http-server": {
+      {{/* KrakenD's plugin/http-server wraps handlers as A(B(C(...))) for
+           name:[A,B,C] — the LAST entry executes FIRST (see
+           https://www.krakend.io/docs/design/execution-flow/). This array is
+           declared in reverse of the intended request-time chain so that
+           jwt-headers (declared first, executes last) sits closest to the
+           router/backend, after session-resolver has had a chance to turn a
+           cookie into the Authorization header it validates. Declaring this
+           list in "chain order" instead of reversed silently makes
+           jwt-headers run first and reject every cookie-only request before
+           session-resolver ever sees it. */}}
       "name": [
-        {{- if $gtEnabled }}
-        "krakend-gateway-timeout"{{ if or $alEnabled $tcEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
-        {{- end }}
-        {{- if $alEnabled }}
-        "krakend-accept-language"{{ if or $tcEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
-        {{- end }}
-        {{- if $tcEnabled }}
-        "krakend-trace-context"{{ if or $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
-        {{- end }}
-        {{- if $irEnabled }}
-        "krakend-ip-resolver"{{ if or $sessEnabled $jwtEnabled }},{{ end }}
+        {{- if $jwtEnabled }}
+        "krakend-jwt-headers"{{ if or $sessEnabled $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
         {{- if $sessEnabled }}
-        "krakend-session-resolver"{{ if $jwtEnabled }},{{ end }}
+        "krakend-session-resolver"{{ if or $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
-        {{- if $jwtEnabled }}
-        "krakend-jwt-headers"
+        {{- if $irEnabled }}
+        "krakend-ip-resolver"{{ if or $tcEnabled $alEnabled $gtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $tcEnabled }}
+        "krakend-trace-context"{{ if or $alEnabled $gtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $alEnabled }}
+        "krakend-accept-language"{{ if $gtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $gtEnabled }}
+        "krakend-gateway-timeout"
         {{- end }}
       ]
       {{- if or $gtEnabled $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
