@@ -41,13 +41,13 @@
     "plugin/http-server": {
       "name": [
         {{- if $gtEnabled }}
-        "krakend-gateway-timeout"{{ if or $alEnabled $tcEnabled $irEnabled $jwtEnabled }},{{ end }}
+        "krakend-gateway-timeout"{{ if or $alEnabled $tcEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
         {{- end }}
         {{- if $alEnabled }}
-        "krakend-accept-language"{{ if or $tcEnabled $irEnabled $jwtEnabled }},{{ end }}
+        "krakend-accept-language"{{ if or $tcEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
         {{- end }}
         {{- if $tcEnabled }}
-        "krakend-trace-context"{{ if or $irEnabled $jwtEnabled }},{{ end }}
+        "krakend-trace-context"{{ if or $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
         {{- end }}
         {{- if $irEnabled }}
         "krakend-ip-resolver"{{ if or $sessEnabled $jwtEnabled }},{{ end }}
@@ -65,12 +65,12 @@
         "trigger_status": {{ .gateway_timeout.trigger_status }},
         "timeout_status": {{ .gateway_timeout.timeout_status }},
         "min_elapsed": "{{ env "GATEWAY_TIMEOUT_MIN_ELAPSED" | default .gateway_timeout.min_elapsed }}"
-      }{{ if or $alEnabled $irEnabled $jwtEnabled }},{{ end }}
+      }{{ if or $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $alEnabled }}
       "krakend-accept-language": {
         "default_value": "{{ .accept_language.default_value }}"
-      }{{ if or $irEnabled $jwtEnabled }},{{ end }}
+      }{{ if or $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $irEnabled }}
       "krakend-ip-resolver": {
