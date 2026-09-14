@@ -111,7 +111,7 @@
         "refresh_timeout_ms": {{ .session.refresh_timeout_ms }},
         "refresh_lock_ttl_seconds": {{ .session.refresh_lock_ttl_seconds }},
         "internal_secret": "{{ env "INTERNAL_SHARED_SECRET" | default "" }}",
-        "allowed_origins": {{ marshal .session.allowed_origins }},
+        "allowed_origins": {{ env "SESSION_ALLOWED_ORIGINS" | default (join "," .session.allowed_origins) | splitList "," | marshal }},
         "csrf_safe_methods": {{ marshal .session.csrf_safe_methods }},
         "skip_paths": {{ marshal .session.skip_paths }}
       }{{ if $jwtEnabled }},{{ end }}
@@ -140,7 +140,7 @@
       {{- end }}
     },
     "security/cors": {
-      "allow_origins": {{ marshal .cors.allow_origins }},
+      "allow_origins": {{ env "CORS_ALLOW_ORIGINS" | default (join "," .cors.allow_origins) | splitList "," | marshal }},
       "allow_methods": {{ marshal .cors.allow_methods }},
       "allow_headers": {{ marshal .cors.allow_headers }},
       "expose_headers": {{ marshal .cors.expose_headers }},
