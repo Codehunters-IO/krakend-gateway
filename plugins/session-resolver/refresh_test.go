@@ -34,6 +34,15 @@ func TestRefresh(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		// A real auth-bff round trip does a Keycloak token exchange — not
+		// instantaneous. This delay is a permanent, deliberate part of the
+		// model, not a test crutch: without it, an in-process mock replies
+		// inside a loser's first 50ms poll every time, so the concurrency
+		// subtest below could never actually exercise the wait branch —
+		// reverting waitForOtherRefresh's condition to its old, broken form
+		// would still pass. See the fix report for the mutation evidence
+		// this produces against this exact arrangement.
+		time.Sleep(150 * time.Millisecond)
 		// The new token — and a strictly-later exp — must land in Valkey,
 		// exactly as auth-bff does it: it rewrites the whole session hash
 		// on every refresh, so a real refresh always advances exp. This is
@@ -90,7 +99,7 @@ func TestRefresh(t *testing.T) {
 			t.Fatalf("reseed failed: %v", err)
 		}
 		// release() clears the lock once the winner's call completes, so
-		// this DEL is defensive rather than load-bearing now — kept so this
+		// this DEL is defensive rather than load-bearing — kept so this
 		// subtest's outcome never depends on the previous one's cleanup.
 		client.Do(context.Background(), client.B().Del().Key("v1:lock:refresh:"+sid).Build())
 		calls.Store(0)
@@ -142,16 +151,102 @@ func TestRefresh(t *testing.T) {
 	})
 }
 
+// TestRefreshSkipsAuthBffWhenAlreadyFresh drives the short-circuit at the
+// top of refresh() on purpose: it is the only path in the file that
+// returns a token with no refresh occurring, and it is what makes the
+// late-caller case in TestRefresh correct. Nothing exercised it
+// deliberately before this test.
+func TestRefreshSkipsAuthBffWhenAlreadyFresh(t *testing.T) {
+	addr := startValkey(t)
+	sid := "R123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	// The stored Exp is already comfortably ahead of what this caller
+	// claims to have observed — as if someone else already refreshed this
+	// session since this caller's own stale reading.
+	seed(t, addr, sid, now+9000, now+36000)
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token":"should-not-be-called"}`))
+	}))
+	defer server.Close()
+
+	cfg := refreshConfig(addr, server.URL)
+	s, err := newStore(cfg)
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	r := newRefresher(cfg, s)
+
+	token, err := r.refresh(context.Background(), sid, now+5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "the.jwt" {
+		t.Errorf("token = %q, want the.jwt (the already-fresh token seed() wrote)", token)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("auth-bff called %d times, want 0 — an already-fresh session must short-circuit before the lock or the HTTP call", got)
+	}
+
+	n, err := s.client.Do(context.Background(), s.client.B().Exists().Key("v1:lock:refresh:"+sid).Build()).AsInt64()
+	if err != nil {
+		t.Fatalf("EXISTS failed: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("a refresh lock was created even though the short-circuit should have avoided it entirely")
+	}
+}
+
+// TestRefreshRejectsInvalidObservedExp pins the guard against the misuse
+// class errInvalidObservedExp exists for: observedExp <= 0 must fail
+// closed rather than being silently read as "everything is already
+// fresher than this", which is what a bare data.Exp > observedExp
+// comparison would otherwise do for every real session.
+func TestRefreshRejectsInvalidObservedExp(t *testing.T) {
+	addr := startValkey(t)
+	sid := "S123456789012345678901234567890123456789012"
+	now := time.Now().Unix()
+	seed(t, addr, sid, now+5, now+36000) // a live, ordinary session
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token":"should-not-happen"}`))
+	}))
+	defer server.Close()
+
+	cfg := refreshConfig(addr, server.URL)
+	s, err := newStore(cfg)
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
+	r := newRefresher(cfg, s)
+
+	for _, observedExp := range []int64{0, -1, -1000} {
+		token, err := r.refresh(context.Background(), sid, observedExp)
+		if !errors.Is(err, errInvalidObservedExp) {
+			t.Errorf("observedExp=%d: err = %v, want errInvalidObservedExp", observedExp, err)
+		}
+		if token != "" {
+			t.Errorf("observedExp=%d: token = %q, want empty", observedExp, token)
+		}
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("auth-bff called %d times, want 0 — an invalid observedExp must fail before the HTTP call", got)
+	}
+}
+
 // TestRefreshFailureModes gives each subtest its own sid rather than sharing
-// one. acquire() never explicitly releases the refresh lock — it decays via
-// lockTTL — so the winner of the 401 subtest would otherwise still hold the
-// lock when the 5xx subtest ran immediately after it, sending that subtest
-// down the wait-for-other-refresh path instead of ever reaching its own
-// mock server. That is a real defect in the brief's original shared-sid
-// version: the 5xx branch it claims to exercise is unreachable under it,
-// and the assertion fails not because the plain-error path is wrong but
-// because it was never taken. Separate sids restore test isolation without
-// changing what either subtest asserts.
+// one. Even though release() now clears the refresh lock explicitly on both
+// the success and failure path — via a compare-and-delete Lua script keyed
+// on a per-acquisition token, so a caller only ever releases the lock it
+// itself acquired — this test still gives each subtest its own sid, purely
+// for isolation: reusing one would leave the 5xx subtest's outcome
+// depending on the 401 subtest's timing rather than on its own behaviour.
 func TestRefreshFailureModes(t *testing.T) {
 	addr := startValkey(t)
 	now := time.Now().Unix()
@@ -267,6 +362,12 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
+		// observedExp=0 here is not exercising errInvalidObservedExp: the
+		// seeded abs_exp is ALSO corrupted (asInt64 zeroes it the same
+		// way), so the abs_exp ceiling check above fires first and this
+		// value is never reached. It mirrors what a real caller would
+		// actually hold for this exact scenario — Task 5's handler reads
+		// the same corrupted exp field and would derive 0 too.
 		_, err = r.refresh(context.Background(), sid, 0)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
@@ -289,6 +390,8 @@ func TestRefreshAbsExpCeiling(t *testing.T) {
 		}
 		r := newRefresher(cfg, s)
 
+		// observedExp=0 is irrelevant here too: data == nil short-circuits
+		// before observedExp is ever looked at.
 		_, err = r.refresh(context.Background(), "Q123456789012345678901234567890123456789012", 0)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,38 +16,37 @@ import (
 
 var errSessionGone = errors.New("session gone")
 
-// releaseScript shortens the refresh lock's TTL to a brief grace window
-// instead of deleting it outright, and only if it still holds the value
-// this caller wrote when it acquired it — a blind release could otherwise
-// touch a lock some other caller legitimately acquired after this one's
-// TTL had already expired. GET+PEXPIRE must be atomic, hence Lua.
-//
-// A grace window rather than an immediate delete matters for a different
-// reason than the token check: a straggler can read stale data (correctly,
-// honestly stale — this is not the observedExp race, see refresh()'s
-// comment) and then be descheduled by the Go runtime between that read and
-// its own acquire() attempt for long enough that the actual winner's whole
-// cycle, release included, completes in between. An immediate delete lets
-// that straggler's late acquire() succeed and call auth-bff a second time.
-// Keeping the lock present a little longer makes SET NX correctly reject
-// that attempt instead, routing it into waitForOtherRefresh — which, using
-// the same external observedExp baseline, correctly hands back the fresh
-// token rather than timing out. lockTTL remains the crash-safety backstop
-// for a winner that never reaches release at all.
+// errInvalidObservedExp guards a misuse class, not a session-state outcome:
+// observedExp is supposed to be the Exp value the CALLER already read
+// before deciding a refresh was needed (see refresh()'s comment). A caller
+// that passes 0 — a forgotten field, a decide() result that dropped Exp —
+// would otherwise sail straight through the "is this already fresher than
+// what I came here for" check below, since data.Exp > 0 is true for every
+// real session. That would silently hand back the unrefreshed,
+// about-to-expire token with err == nil: strictly worse than the bug this
+// file was fixed for in the previous round, because nothing about the
+// return value looks wrong. Failing closed here turns that whole misuse
+// class into a 503 instead.
+var errInvalidObservedExp = errors.New("observedExp must be a positive unix timestamp")
+
+// releaseScript deletes the refresh lock only if it still holds the value
+// this caller wrote when it acquired it — a compare-and-delete, since a
+// blind DEL could remove a lock some other caller legitimately acquired
+// after this one's TTL had already expired. GET+DEL must be atomic, hence
+// Lua rather than two separate calls.
 var releaseScript = valkey.NewLuaScript(
-	`if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end`,
+	`if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`,
 )
 
 type refresher struct {
-	store        *store
-	client       *http.Client
-	url          string
-	secret       string
-	lockTTL      time.Duration
-	timeout      time.Duration
-	waitStep     time.Duration
-	maxWait      time.Duration
-	releaseGrace time.Duration
+	store    *store
+	client   *http.Client
+	url      string
+	secret   string
+	lockTTL  time.Duration
+	timeout  time.Duration
+	waitStep time.Duration
+	maxWait  time.Duration
 }
 
 func newRefresher(cfg *pluginConfig, s *store) *refresher {
@@ -62,10 +60,12 @@ func newRefresher(cfg *pluginConfig, s *store) *refresher {
 		lockTTL:  time.Duration(cfg.RefreshLockTTLSeconds) * time.Second,
 		timeout:  timeout,
 		waitStep: waitStep,
-		maxWait:  500 * time.Millisecond,
-		// Comfortably longer than realistic goroutine-scheduling delay
-		// under contention, far shorter than lockTTL.
-		releaseGrace: 5 * waitStep,
+		// A loser must not give up before the winner's own HTTP call would:
+		// hardcoding this below RefreshTimeoutMs turned a slow-but-legitimate
+		// round trip into N-1 spurious 503s for a token that was still
+		// valid. waitStep on top so a poll fires shortly after the winner's
+		// own deadline would have been reached, rather than racing it.
+		maxWait: timeout + waitStep,
 	}
 }
 
@@ -86,19 +86,20 @@ func newRefresher(cfg *pluginConfig, s *store) *refresher {
 // POST-refresh state, at which point no comparison against itself can ever
 // show a difference and both the "already fresh, skip the lock" check and
 // the "wait for it to change" loop would wait forever or fire immediately
-// for the wrong reason. This was found empirically while stabilising
-// TestRefresh's concurrency subtest — see the fix report for the two
-// narrower attempts (comparing against refresh()'s own internal read, and
-// a short post-release grace window) that this replaced, and why each
-// still left a reproducible gap.
+// for the wrong reason.
 //
-// abs_exp is checked before observedExp, before the lock is ever touched
-// and before auth-bff is ever contacted: a session past its absolute
-// ceiling is dead even if a refresh would succeed, so neither the lock nor
-// the HTTP call may be reached for it. Tasks 2 and 3 deliberately carry no
-// comparison logic — decide() has no expiry fields and store.load()
-// returns the raw values — so this is the first point in the plugin able
-// to enforce that ordering.
+// abs_exp is checked before observedExp's own validity, before the lock is
+// ever touched and before auth-bff is ever contacted: a session past its
+// absolute ceiling is dead even if a refresh would succeed, so neither the
+// lock nor the HTTP call may be reached for it. Tasks 2 and 3 deliberately
+// carry no comparison logic — decide() has no expiry fields and
+// store.load() returns the raw values — so this is the first point in the
+// plugin able to enforce that ordering. Placing the abs_exp check first
+// also means a session whose exp/abs_exp are BOTH corrupted (asInt64
+// zeroes a malformed field for either) is denied by that check — the
+// correct, existing outcome — before ever reaching the observedExp
+// validity guard below; that guard exists for a live session called with a
+// bad parameter, not to re-litigate a corrupted one.
 func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) (string, error) {
 	data, err := r.store.load(ctx, sid)
 	if err != nil {
@@ -115,6 +116,10 @@ func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) 
 		return "", errSessionGone
 	}
 
+	if observedExp <= 0 {
+		return "", errInvalidObservedExp
+	}
+
 	// Someone may have already refreshed past what this caller observed,
 	// in the window between that observation and this call — proactive
 	// refresh means many concurrent requests can each independently decide
@@ -122,7 +127,7 @@ func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) 
 	// currently-stored Exp is already fresher than that shared baseline,
 	// reuse it: no need to touch the lock or call auth-bff at all.
 	if data.Exp > observedExp {
-		return data.AccessToken, nil
+		return tokenOrErr(data)
 	}
 
 	won, token, err := r.acquire(ctx, sid)
@@ -134,12 +139,47 @@ func (r *refresher) refresh(ctx context.Context, sid string, observedExp int64) 
 	}
 	// Release once this call is done, success or failure, so the next
 	// caller for this session does not have to wait out the full lockTTL
-	// for work that already finished. See releaseScript's comment for why
-	// this shortens the lock's TTL to a brief grace window rather than
-	// deleting it outright. lockTTL itself remains the crash-safety
-	// backstop for the case where this process dies before reaching here.
+	// for work that already finished. lockTTL itself remains the
+	// crash-safety backstop for the case where this process dies before
+	// reaching here.
 	defer r.release(sid, token)
+
+	// Re-check against observedExp — the same external, shared baseline,
+	// not this caller's own earlier read — now that the lock is held. A
+	// caller can win a just-freed lock shortly after some other caller
+	// finished and released it, having read stale data before that other
+	// refresh's write landed and only reached acquire() after enough
+	// scheduling delay for the whole cycle to complete in between. Without
+	// this, that caller would call auth-bff a second time for work already
+	// done. This is deterministic, not a timing narrowing: the prior
+	// winner's Valkey write happens-before its release, which
+	// happens-before this acquire succeeded, so if a refresh beat us here,
+	// this read observes it, regardless of how much scheduling delay
+	// preceded it.
+	fresh, err := r.store.load(ctx, sid)
+	if err != nil {
+		return "", err
+	}
+	if fresh == nil {
+		return "", errSessionGone
+	}
+	if fresh.Exp > observedExp {
+		return tokenOrErr(fresh)
+	}
+
 	return r.callAuthBff(ctx, sid)
+}
+
+// tokenOrErr guards the same empty-token case callAuthBff's own decode
+// step already guards: load() returns (nil, nil) only for a nil Valkey
+// reply, not for an empty string field, so a hash with an advanced exp but
+// an empty access_token would otherwise yield ("", nil) — a reported
+// success carrying no usable token.
+func tokenOrErr(data *sessionData) (string, error) {
+	if data.AccessToken == "" {
+		return "", errors.New("session has no access token")
+	}
+	return data.AccessToken, nil
 }
 
 // acquire returns (true, token, nil) when this caller won the lock, and
@@ -170,16 +210,15 @@ func (r *refresher) acquire(ctx context.Context, sid string) (bool, string, erro
 	return true, token, nil
 }
 
-// release shortens the refresh lock this caller acquired down to a brief
-// grace window, identified by the token it wrote in acquire. It runs on its
-// own short-lived, independent context: this is best-effort cleanup that
-// must not be skipped just because the caller's own context was already
-// cancelled or its deadline consumed by the HTTP call to auth-bff.
+// release deletes the refresh lock this caller acquired, identified by the
+// token it wrote in acquire. It runs on its own short-lived, independent
+// context: this is best-effort cleanup that must not be skipped just
+// because the caller's own context was already cancelled or its deadline
+// consumed by the HTTP call to auth-bff.
 func (r *refresher) release(sid, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.store.timeout)
 	defer cancel()
-	graceMs := strconv.FormatInt(r.releaseGrace.Milliseconds(), 10)
-	_ = releaseScript.Exec(ctx, r.store.client, []string{r.lockKey(sid)}, []string{token, graceMs}).Error()
+	_ = releaseScript.Exec(ctx, r.store.client, []string{r.lockKey(sid)}, []string{token}).Error()
 }
 
 func (r *refresher) lockKey(sid string) string {
@@ -216,7 +255,7 @@ func (r *refresher) waitForOtherRefresh(ctx context.Context, sid string, observe
 			return "", errSessionGone
 		}
 		if data.Exp > observedExp {
-			return data.AccessToken, nil
+			return tokenOrErr(data)
 		}
 	}
 	return "", errors.New("timed out waiting for a concurrent refresh")
