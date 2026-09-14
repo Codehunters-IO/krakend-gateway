@@ -33,6 +33,7 @@ check: gen-check ## Validate KrakenD configuration (regen + drift + schema)
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
 	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
+	@./scripts/check-plugin-chain-order.sh
 
 generate: ## Generate the final krakend.json from templates
 	@FC_ENABLE=1 \
