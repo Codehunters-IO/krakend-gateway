@@ -2,21 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a KrakenD HTTP-server plugin that turns an opaque session cookie into an `Authorization: Bearer` header by reading the session from Redis, so browser traffic reaches backends with a validated JWT while non-browser clients keep sending their own bearer tokens.
+**Goal:** Add a KrakenD HTTP-server plugin that turns an opaque session cookie into an `Authorization: Bearer` header by reading the session from Valkey, so browser traffic reaches backends with a validated JWT while non-browser clients keep sending their own bearer tokens.
 
-**Architecture:** A Go plugin in `plugins/session-resolver/`, its own module like the five existing plugins. It runs immediately before `krakend-jwt-headers` in the `plugin/http-server` chain, so `jwt-headers` and every backend stay unchanged. The plugin only reads Redis; the `auth-bff` service (separate plan) is the only writer.
+**Architecture:** A Go plugin in `plugins/session-resolver/`, its own module like the five existing plugins. It runs immediately before `krakend-jwt-headers` in the `plugin/http-server` chain, so `jwt-headers` and every backend stay unchanged. The plugin only reads Valkey; the `auth-bff` service (separate plan) is the only writer.
 
-**Tech Stack:** Go 1.25.7, `redis/go-redis/v9`, `testcontainers-go` for integration tests, KrakenD 2.13.4, Docker builder image `krakend/builder:2.13.4`.
+**Tech Stack:** Go 1.25.7, `valkey-io/valkey-go` `v1.0.77` (native Valkey client: command-builder pattern with typed result accessors, automatic pipelining), `testcontainers-go` for integration tests, KrakenD 2.13.4, Docker builder image `krakend/builder:2.13.4`. Target server: Valkey `8.1.10` — a wire-compatible fork of Redis 7.2.4.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-token-handler-bff-design.md`
 
-**Companion plan:** `docs/superpowers/plans/2026-08-31-auth-bff.md` writes the Redis contract this plugin reads. The two can be built in parallel — the contract is fully specified below — but end-to-end verification (Task 9) needs `auth-bff` running.
+**Companion plan:** `docs/superpowers/plans/2026-08-31-auth-bff.md` writes the Valkey contract this plugin reads. The two can be built in parallel — the contract is fully specified below — but end-to-end verification (Task 9) needs `auth-bff` running.
 
 ## Global Constraints
 
 - Go `1.25.7`, matching the other plugins and the builder image.
 - Plugin name: `krakend-session-resolver`. Config key under `extra_config."plugin/http-server"` uses that exact name.
-- Redis key prefix `v1:`. Hash `v1:session:{sid}` with fields `ver, sub, kc_sid, access_token, exp, abs_exp, refresh_token_enc, id_token_enc, created_at`. The plugin reads only `access_token, exp, abs_exp, sub` and **must never** read the `_enc` fields.
+- Valkey key prefix `v1:`. Hash `v1:session:{sid}` with fields `ver, sub, kc_sid, access_token, exp, abs_exp, refresh_token_enc, id_token_enc, created_at`. The plugin reads only `access_token, exp, abs_exp, sub` and **must never** read the `_enc` fields.
 - **The plugin renews the TTL of `v1:session:{sid}` and of that key ONLY.** It must never touch the TTL of the reverse index `v1:kcsid:{kc_sid}`. `auth-bff` deliberately writes that index with a TTL running to the session's `abs_exp` rather than to the idle window, precisely so the index outlives every idle-TTL cycle. Renewing it here with `idle_ttl_seconds` would not extend anything — it would *shorten* it, collapsing a ceiling-length TTL back to 30 minutes on every renewal, and the index would then expire while the session is still alive. The consequence is silent and severe: `auth-bff` resolves backchannel logout through that index, so once it is gone Keycloak's logout callback finds nothing, no-ops, and returns **200 OK** while the session keeps authenticating requests at this edge until its ceiling. Backchannel revocation fails open and reports success. This is not a style rule — it is the one cross-repo invariant this plugin can break without any test in either repository going red.
 - `sid` is exactly 43 base64url characters (`[A-Za-z0-9_-]`).
 - Every failure path fails closed: 401 or 503, never "pass through unauthenticated".
@@ -34,13 +34,13 @@ The spec's observability section promises Prometheus counters "via the existing 
 - `plugins/session-resolver/go.mod` — own module, like every other plugin.
 - `plugins/session-resolver/main.go` — registerer boilerplate, config parsing, the handler.
 - `plugins/session-resolver/matchers.go` — skip-path wildcard matching (same semantics as `jwt-headers`).
-- `plugins/session-resolver/session.go` — the Redis read and its decoded shape.
-- `plugins/session-resolver/decide.go` — the pure decision function; all branching logic lives here so it is testable without HTTP or Redis.
+- `plugins/session-resolver/session.go` — the Valkey read and its decoded shape.
+- `plugins/session-resolver/decide.go` — the pure decision function; all branching logic lives here so it is testable without HTTP or Valkey.
 - `plugins/session-resolver/refresh.go` — the lock-guarded call to `auth-bff`.
 - `config/settings/session.json` — plugin settings, new file.
 - `config/krakend.tmpl` — new `{{- if $sessEnabled }}` block plus the name in the chain array.
 - `endpoints.yaml` — five new public `/auth/*` routes.
-- `docker-compose.yml` — Redis service and the new environment variables.
+- `docker-compose.yml` — Valkey service and the new environment variables.
 - `Makefile` — `session-resolver` added to `PLUGINS`.
 
 ---
@@ -66,7 +66,7 @@ module session-resolver
 
 go 1.25.7
 
-require github.com/redis/go-redis/v9 v9.7.3
+require github.com/valkey-io/valkey-go v1.0.77
 ```
 
 Run `cd plugins/session-resolver && go mod tidy` after the first file that imports it exists; for now the require line is enough to pin the version.
@@ -85,7 +85,7 @@ import (
 func TestParseConfig(t *testing.T) {
 	valid := map[string]interface{}{
 		pluginName: map[string]interface{}{
-			"redis_addr":                "redis:6379",
+			"valkey_addr":               "valkey:6379",
 			"cookie_name":               "sid",
 			"key_prefix":                "v1:",
 			"idle_ttl_seconds":          1800,
@@ -102,8 +102,8 @@ func TestParseConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.RedisAddr != "redis:6379" {
-			t.Errorf("redis_addr = %q, want redis:6379", cfg.RedisAddr)
+		if cfg.ValkeyAddr != "valkey:6379" {
+			t.Errorf("valkey_addr = %q, want valkey:6379", cfg.ValkeyAddr)
 		}
 		if cfg.CookieName != "sid" {
 			t.Errorf("cookie_name = %q, want sid", cfg.CookieName)
@@ -115,8 +115,8 @@ func TestParseConfig(t *testing.T) {
 
 	t.Run("applies defaults for optional fields", func(t *testing.T) {
 		cfg, _ := parseConfig(valid)
-		if cfg.RedisTimeoutMs != 200 {
-			t.Errorf("redis_timeout_ms default = %d, want 200", cfg.RedisTimeoutMs)
+		if cfg.ValkeyTimeoutMs != 200 {
+			t.Errorf("valkey_timeout_ms default = %d, want 200", cfg.ValkeyTimeoutMs)
 		}
 		if cfg.RefreshTimeoutMs != 3000 {
 			t.Errorf("refresh_timeout_ms default = %d, want 3000", cfg.RefreshTimeoutMs)
@@ -136,7 +136,7 @@ func TestParseConfig(t *testing.T) {
 		wantErr string
 	}{
 		{"missing config key", func(m map[string]interface{}) { delete(m, pluginName) }, "not found"},
-		{"empty redis_addr", func(m map[string]interface{}) { m[pluginName].(map[string]interface{})["redis_addr"] = "" }, "redis_addr"},
+		{"empty valkey_addr", func(m map[string]interface{}) { m[pluginName].(map[string]interface{})["valkey_addr"] = "" }, "valkey_addr"},
 		{"empty cookie_name", func(m map[string]interface{}) { m[pluginName].(map[string]interface{})["cookie_name"] = "" }, "cookie_name"},
 		{"empty internal_secret", func(m map[string]interface{}) { m[pluginName].(map[string]interface{})["internal_secret"] = "" }, "internal_secret"},
 		{"refresh_url without sid placeholder", func(m map[string]interface{}) {
@@ -253,12 +253,17 @@ func (r registerer) RegisterHandlers(f func(
 	f(string(r), r.registerHandlers)
 }
 
+// There is no valkey_pool_size: valkey-go does not pool connections the way
+// go-redis does. It auto-pipelines concurrent commands over a small
+// multiplexed set of TCP connections (ClientOption.PipelineMultiplex,
+// default 2 -> 4 connections for a single-instance client) instead of
+// checking a large logical pool in and out per call. A pool-size knob would
+// have nothing to control, so it is dropped rather than kept and ignored.
 type pluginConfig struct {
-	RedisAddr             string   `json:"redis_addr"`
-	RedisPassword         string   `json:"redis_password"`
-	RedisDB               int      `json:"redis_db"`
-	RedisTimeoutMs        int      `json:"redis_timeout_ms"`
-	RedisPoolSize         int      `json:"redis_pool_size"`
+	ValkeyAddr            string   `json:"valkey_addr"`
+	ValkeyPassword        string   `json:"valkey_password"`
+	ValkeyDB              int      `json:"valkey_db"`
+	ValkeyTimeoutMs       int      `json:"valkey_timeout_ms"`
 	KeyPrefix             string   `json:"key_prefix"`
 	CookieName            string   `json:"cookie_name"`
 	IdleTTLSeconds        int      `json:"idle_ttl_seconds"`
@@ -289,8 +294,8 @@ func parseConfig(extra map[string]interface{}) (*pluginConfig, error) {
 	}
 
 	// Required. A misconfigured session plugin must stop the gateway, not fail open.
-	if cfg.RedisAddr == "" {
-		return nil, fmt.Errorf("redis_addr is required")
+	if cfg.ValkeyAddr == "" {
+		return nil, fmt.Errorf("valkey_addr is required")
 	}
 	if cfg.CookieName == "" {
 		return nil, fmt.Errorf("cookie_name is required")
@@ -303,11 +308,8 @@ func parseConfig(extra map[string]interface{}) (*pluginConfig, error) {
 	}
 
 	// Defaults.
-	if cfg.RedisTimeoutMs == 0 {
-		cfg.RedisTimeoutMs = 200
-	}
-	if cfg.RedisPoolSize == 0 {
-		cfg.RedisPoolSize = 50
+	if cfg.ValkeyTimeoutMs == 0 {
+		cfg.ValkeyTimeoutMs = 200
 	}
 	if cfg.KeyPrefix == "" {
 		cfg.KeyPrefix = "v1:"
@@ -407,7 +409,7 @@ git commit -m "feat(session-resolver): plugin skeleton, config parsing and skip 
 
 ### Task 2: The decision function
 
-All branching lives in one pure function so it can be tested without HTTP, Redis, or a clock.
+All branching lives in one pure function so it can be tested without HTTP, Valkey, or a clock.
 
 **Files:**
 - Create: `plugins/session-resolver/decide.go`
@@ -422,7 +424,7 @@ All branching lives in one pure function so it can be tested without HTTP, Redis
       actionPassThrough action = iota // bearer present, skip path, or preflight
       actionUnauthorized
       actionForbidden
-      actionResolve                   // read Redis and inject
+      actionResolve                   // read Valkey and inject
   )
   type request struct {
       Path, Method, Authorization, Origin, Referer, Cookie string
@@ -495,7 +497,7 @@ func TestDecide(t *testing.T) {
 			want: actionPassThrough,
 		},
 		{
-			name: "malformed sid is rejected without touching redis",
+			name: "malformed sid is rejected without touching valkey",
 			req:  request{Path: "/api/projects", Method: "GET", Cookie: "too-short"},
 			want: actionUnauthorized,
 		},
@@ -671,7 +673,7 @@ git commit -m "feat(session-resolver): pure decision function with dual mode and
 
 ---
 
-### Task 3: Redis session reader
+### Task 3: Valkey session reader
 
 **Files:**
 - Create: `plugins/session-resolver/session.go`
@@ -683,17 +685,19 @@ git commit -m "feat(session-resolver): pure decision function with dual mode and
   ```go
   type sessionData struct { AccessToken, Subject string; Exp, AbsExp int64 }
   type store struct { ... }
-  func newStore(cfg *pluginConfig) *store
+  func newStore(cfg *pluginConfig) (*store, error)
   func (s *store) load(ctx context.Context, sid string) (*sessionData, error)   // nil, nil on miss
   func (s *store) renewIdle(ctx context.Context, sid string)                     // best effort
   func (s *store) drop(ctx context.Context, sid string)
   ```
 
+  `newStore` now returns an error, unlike a typical go-redis constructor. `valkey.NewClient` is not lazy: without `ForceSingleClient`, it dials immediately to probe cluster topology and returns a non-nil error if that probe fails. This plugin always sets `ForceSingleClient: true` (the topology is always one standalone Valkey node, never a cluster) — and per the client's documented behavior, that flag makes `NewClient` return a *usable, self-reconnecting* client even when the initial dial fails, alongside a non-nil error. `newStore` treats "client is non-nil" as success and discards that transient dial error; only a nil client (which the library returns solely for real misconfiguration, e.g. an empty address — already rejected by `parseConfig`) is treated as a fatal error. This preserves the original behavior: the plugin loads even if Valkey is momentarily unreachable at gateway startup, and every subsequent request still fails closed until Valkey answers.
+
 - [ ] **Step 1: Add test dependencies**
 
 ```bash
 cd plugins/session-resolver
-go get github.com/redis/go-redis/v9@v9.7.3
+go get github.com/valkey-io/valkey-go@v1.0.77
 go get github.com/testcontainers/testcontainers-go@v0.35.0
 go mod tidy
 ```
@@ -708,27 +712,28 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/valkey-io/valkey-go"
 )
 
-func startRedis(t *testing.T) string {
+func startValkey(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "redis:7.4-alpine",
+			Image:        "valkey/valkey:8-alpine",
 			ExposedPorts: []string{"6379/tcp"},
 			WaitingFor:   wait.ForListeningPort("6379/tcp"),
 		},
 		Started: true,
 	})
 	if err != nil {
-		t.Fatalf("failed to start redis: %v", err)
+		t.Fatalf("failed to start valkey: %v", err)
 	}
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
 
@@ -739,37 +744,58 @@ func startRedis(t *testing.T) string {
 	return endpoint
 }
 
-func seed(t *testing.T, addr, sid string, exp, absExp int64) *redis.Client {
+func seed(t *testing.T, addr, sid string, exp, absExp int64) valkey.Client {
 	t.Helper()
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:       []string{addr},
+		ForceSingleClient: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to connect to valkey: %v", err)
+	}
+	t.Cleanup(client.Close)
+
 	ctx := context.Background()
 	key := "v1:session:" + sid
-	if err := client.HSet(ctx, key, map[string]interface{}{
-		"ver":               "1",
-		"sub":               "user-1",
-		"kc_sid":            "kc-1",
-		"access_token":      "the.jwt",
-		"exp":               exp,
-		"abs_exp":           absExp,
-		"refresh_token_enc": "k1.iv.cipher",
-		"id_token_enc":      "k1.iv.cipher",
-		"created_at":        exp - 300,
-	}).Err(); err != nil {
+	hset := client.B().Hset().Key(key).FieldValue().
+		FieldValue("ver", "1").
+		FieldValue("sub", "user-1").
+		FieldValue("kc_sid", "kc-1").
+		FieldValue("access_token", "the.jwt").
+		FieldValue("exp", strconv.FormatInt(exp, 10)).
+		FieldValue("abs_exp", strconv.FormatInt(absExp, 10)).
+		FieldValue("refresh_token_enc", "k1.iv.cipher").
+		FieldValue("id_token_enc", "k1.iv.cipher").
+		FieldValue("created_at", strconv.FormatInt(exp-300, 10)).
+		Build()
+	if err := client.Do(ctx, hset).Error(); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	if err := client.Expire(ctx, key, 30*time.Minute).Err(); err != nil {
+	if err := client.Do(ctx, client.B().Expire().Key(key).Seconds(1800).Build()).Error(); err != nil {
 		t.Fatalf("expire failed: %v", err)
 	}
 	return client
 }
 
+func ttlOf(t *testing.T, client valkey.Client, key string) time.Duration {
+	t.Helper()
+	seconds, err := client.Do(context.Background(), client.B().Ttl().Key(key).Build()).AsInt64()
+	if err != nil {
+		t.Fatalf("TTL failed: %v", err)
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 func TestStoreLoad(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "B123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	seed(t, addr, sid, now+300, now+36000)
 
-	s := newStore(&pluginConfig{RedisAddr: addr, KeyPrefix: "v1:", RedisTimeoutMs: 500, IdleTTLSeconds: 1800})
+	s, err := newStore(&pluginConfig{ValkeyAddr: addr, KeyPrefix: "v1:", ValkeyTimeoutMs: 500, IdleTTLSeconds: 1800})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
 	ctx := context.Background()
 
 	t.Run("reads the four contract fields", func(t *testing.T) {
@@ -804,35 +830,44 @@ func TestStoreLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("errors when redis is unreachable", func(t *testing.T) {
-		dead := newStore(&pluginConfig{RedisAddr: "127.0.0.1:1", KeyPrefix: "v1:", RedisTimeoutMs: 100})
+	t.Run("errors when valkey is unreachable", func(t *testing.T) {
+		// newStore still succeeds: ForceSingleClient makes valkey.NewClient
+		// return a usable, self-reconnecting client even though the initial
+		// dial fails. The failure must surface on load(), not construction.
+		dead, err := newStore(&pluginConfig{ValkeyAddr: "127.0.0.1:1", KeyPrefix: "v1:", ValkeyTimeoutMs: 100})
+		if err != nil {
+			t.Fatalf("newStore should tolerate an unreachable address at construction time: %v", err)
+		}
 		if _, err := dead.load(ctx, sid); err == nil {
-			t.Fatal("expected an error when redis is unreachable")
+			t.Fatal("expected an error when valkey is unreachable")
 		}
 	})
 }
 
 func TestStoreRenewIdleOnlyBelowHalf(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "D123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	client := seed(t, addr, sid, now+300, now+36000)
 	ctx := context.Background()
 
-	s := newStore(&pluginConfig{RedisAddr: addr, KeyPrefix: "v1:", RedisTimeoutMs: 500, IdleTTLSeconds: 1800})
+	s, err := newStore(&pluginConfig{ValkeyAddr: addr, KeyPrefix: "v1:", ValkeyTimeoutMs: 500, IdleTTLSeconds: 1800})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
 	key := "v1:session:" + sid
 
 	// TTL is 30m — above half, so renewal must be a no-op write-wise.
-	client.Expire(ctx, key, 30*time.Minute)
+	client.Do(ctx, client.B().Expire().Key(key).Seconds(1800).Build())
 	s.renewIdle(ctx, sid)
-	if ttl := client.TTL(ctx, key).Val(); ttl < 29*time.Minute {
+	if ttl := ttlOf(t, client, key); ttl < 29*time.Minute {
 		t.Errorf("ttl = %v, expected it left untouched near 30m", ttl)
 	}
 
 	// Drop below half: renewal must push it back to the full idle TTL.
-	client.Expire(ctx, key, 5*time.Minute)
+	client.Do(ctx, client.B().Expire().Key(key).Seconds(300).Build())
 	s.renewIdle(ctx, sid)
-	if ttl := client.TTL(ctx, key).Val(); ttl < 29*time.Minute {
+	if ttl := ttlOf(t, client, key); ttl < 29*time.Minute {
 		t.Errorf("ttl = %v, expected it renewed to ~30m", ttl)
 	}
 
@@ -842,24 +877,31 @@ func TestStoreRenewIdleOnlyBelowHalf(t *testing.T) {
 	// no-ops while answering Keycloak 200 OK. Nothing else in either
 	// repository catches that, so it is asserted here.
 	index := "v1:kcsid:kc-1"
-	client.Set(ctx, index, sid, 10*time.Hour)
+	client.Do(ctx, client.B().Set().Key(index).Value(sid).Ex(10*time.Hour).Build())
 	s.renewIdle(ctx, sid)
-	if ttl := client.TTL(ctx, index).Val(); ttl < 9*time.Hour {
+	if ttl := ttlOf(t, client, index); ttl < 9*time.Hour {
 		t.Errorf("kcsid index ttl = %v, want it left near 10h — renewIdle must not touch the index", ttl)
 	}
 }
 
 func TestStoreDrop(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "E123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	client := seed(t, addr, sid, now+300, now+36000)
 	ctx := context.Background()
 
-	s := newStore(&pluginConfig{RedisAddr: addr, KeyPrefix: "v1:", RedisTimeoutMs: 500, IdleTTLSeconds: 1800})
+	s, err := newStore(&pluginConfig{ValkeyAddr: addr, KeyPrefix: "v1:", ValkeyTimeoutMs: 500, IdleTTLSeconds: 1800})
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
 	s.drop(ctx, sid)
 
-	if n := client.Exists(ctx, "v1:session:"+sid).Val(); n != 0 {
+	n, err := client.Do(ctx, client.B().Exists().Key("v1:session:"+sid).Build()).AsInt64()
+	if err != nil {
+		t.Fatalf("EXISTS failed: %v", err)
+	}
+	if n != 0 {
 		t.Errorf("session key still exists after drop")
 	}
 }
@@ -870,6 +912,8 @@ func TestStoreDrop(t *testing.T) {
 Run: `cd plugins/session-resolver && go test ./... -run TestStore`
 Expected: FAIL — `undefined: newStore`. Docker must be running.
 
+Note: `newStore` returns two values now (`*store, error`); the failing compile error appears the same way regardless.
+
 - [ ] **Step 4: Write the store**
 
 `plugins/session-resolver/session.go`:
@@ -878,10 +922,10 @@ package main
 
 import (
 	"context"
-	"strconv"
+	"net"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 )
 
 // sessionData is the read projection of v1:session:{sid}. The *_enc fields are
@@ -895,46 +939,71 @@ type sessionData struct {
 }
 
 type store struct {
-	client  *redis.Client
+	client  valkey.Client
 	prefix  string
 	timeout time.Duration
 	idleTTL time.Duration
 }
 
-func newStore(cfg *pluginConfig) *store {
-	timeout := time.Duration(cfg.RedisTimeoutMs) * time.Millisecond
+// newStore returns an error only for real misconfiguration. valkey.NewClient
+// dials eagerly to probe cluster topology, but ForceSingleClient (always set
+// here: this plugin only ever talks to one standalone Valkey node, never a
+// cluster) makes it return a usable, self-reconnecting client even when that
+// initial dial fails — alongside a non-nil error carrying the dial failure.
+// A nil client is the only case that means real misconfiguration (e.g. an
+// empty address, already rejected by parseConfig), so that is the only case
+// treated as fatal here; the transient dial error is otherwise discarded and
+// left to resurface on the first load().
+func newStore(cfg *pluginConfig) (*store, error) {
+	timeout := time.Duration(cfg.ValkeyTimeoutMs) * time.Millisecond
+	client, err := valkey.NewClient(valkey.ClientOption{
+		InitAddress:       []string{cfg.ValkeyAddr},
+		Password:          cfg.ValkeyPassword,
+		SelectDB:          cfg.ValkeyDB,
+		Dialer:            net.Dialer{Timeout: timeout},
+		ConnWriteTimeout:  timeout,
+		ForceSingleClient: true,
+	})
+	if client == nil {
+		return nil, err
+	}
 	return &store{
-		client: redis.NewClient(&redis.Options{
-			Addr:         cfg.RedisAddr,
-			Password:     cfg.RedisPassword,
-			DB:           cfg.RedisDB,
-			PoolSize:     cfg.RedisPoolSize,
-			DialTimeout:  timeout,
-			ReadTimeout:  timeout,
-			WriteTimeout: timeout,
-		}),
+		client:  client,
 		prefix:  cfg.KeyPrefix,
 		timeout: timeout,
 		idleTTL: time.Duration(cfg.IdleTTLSeconds) * time.Second,
-	}
+	}, nil
 }
 
 // load returns (nil, nil) when the session does not exist, and a non-nil error
-// only when Redis itself failed — the caller distinguishes 401 from 503 on that.
+// only when Valkey itself failed — the caller distinguishes 401 from 503 on
+// that. HMGET always replies with an array the length of the requested field
+// list, even on a missing key (each element nil); a missing session is
+// detected from the first field (access_token) being a nil reply, not from
+// the array itself being nil.
 func (s *store) load(ctx context.Context, sid string) (*sessionData, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	values, err := s.client.HMGet(ctx, s.key(sid), "access_token", "sub", "exp", "abs_exp").Result()
+	cmd := s.client.B().Hmget().Key(s.key(sid)).Field("access_token", "sub", "exp", "abs_exp").Build()
+	values, err := s.client.Do(ctx, cmd).ToArray()
 	if err != nil {
 		return nil, err
 	}
-	if len(values) != 4 || values[0] == nil {
+	if len(values) != 4 {
 		return nil, nil
 	}
 
+	accessToken, err := values[0].ToString()
+	if valkey.IsValkeyNil(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	return &sessionData{
-		AccessToken: asString(values[0]),
+		AccessToken: accessToken,
 		Subject:     asString(values[1]),
 		Exp:         asInt64(values[2]),
 		AbsExp:      asInt64(values[3]),
@@ -953,40 +1022,42 @@ func (s *store) renewIdle(ctx context.Context, sid string) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	ttl, err := s.client.TTL(ctx, s.key(sid)).Result()
-	if err != nil || ttl <= 0 {
+	ttlSeconds, err := s.client.Do(ctx, s.client.B().Ttl().Key(s.key(sid)).Build()).AsInt64()
+	if err != nil || ttlSeconds <= 0 {
 		return
 	}
+	ttl := time.Duration(ttlSeconds) * time.Second
 	if ttl*2 < s.idleTTL {
-		_ = s.client.Expire(ctx, s.key(sid), s.idleTTL).Err()
+		expire := s.client.B().Expire().Key(s.key(sid)).Seconds(int64(s.idleTTL.Seconds())).Build()
+		_ = s.client.Do(ctx, expire).Error()
 	}
 }
 
 func (s *store) drop(ctx context.Context, sid string) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	_ = s.client.Del(ctx, s.key(sid)).Err()
+	_ = s.client.Do(ctx, s.client.B().Del().Key(s.key(sid)).Build()).Error()
 }
 
 func (s *store) key(sid string) string { return s.prefix + "session:" + sid }
 
-func asString(v interface{}) string {
-	if str, ok := v.(string); ok {
-		return str
+// asString and asInt64 tolerate a nil or unexpected reply by returning the
+// zero value, matching the original defensive decoding: a corrupted record
+// should not panic the request path.
+func asString(m valkey.ValkeyMessage) string {
+	v, err := m.ToString()
+	if err != nil {
+		return ""
 	}
-	return ""
+	return v
 }
 
-func asInt64(v interface{}) int64 {
-	str, ok := v.(string)
-	if !ok {
-		return 0
-	}
-	n, err := strconv.ParseInt(str, 10, 64)
+func asInt64(m valkey.ValkeyMessage) int64 {
+	v, err := m.AsInt64()
 	if err != nil {
 		return 0
 	}
-	return n
+	return v
 }
 ```
 
@@ -999,7 +1070,7 @@ Expected: PASS.
 
 ```bash
 git add plugins/session-resolver
-git commit -m "feat(session-resolver): redis session reader with half-life ttl renewal"
+git commit -m "feat(session-resolver): valkey session reader with half-life ttl renewal"
 ```
 
 ---
@@ -1041,7 +1112,7 @@ import (
 )
 
 func TestRefresh(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "F123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	client := seed(t, addr, sid, now+5, now+36000)
@@ -1057,24 +1128,28 @@ func TestRefresh(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// The new token must land in Redis, exactly as auth-bff does it.
-		client.HSet(req.Context(), "v1:session:"+sid, "access_token", "fresh.jwt")
+		// The new token must land in Valkey, exactly as auth-bff does it.
+		hset := client.B().Hset().Key("v1:session:"+sid).FieldValue().FieldValue("access_token", "fresh.jwt").Build()
+		client.Do(req.Context(), hset)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"fresh.jwt"}`))
 	}))
 	defer server.Close()
 
 	cfg := &pluginConfig{
-		RedisAddr:             addr,
+		ValkeyAddr:            addr,
 		KeyPrefix:             "v1:",
-		RedisTimeoutMs:        500,
+		ValkeyTimeoutMs:       500,
 		IdleTTLSeconds:        1800,
 		RefreshURL:            server.URL + "/internal/sessions/{sid}/refresh",
 		RefreshTimeoutMs:      2000,
 		RefreshLockTTLSeconds: 5,
 		InternalSecret:        "s3cret",
 	}
-	s := newStore(cfg)
+	s, err := newStore(cfg)
+	if err != nil {
+		t.Fatalf("newStore failed: %v", err)
+	}
 	r := newRefresher(cfg, s)
 
 	t.Run("returns the refreshed access token", func(t *testing.T) {
@@ -1088,7 +1163,7 @@ func TestRefresh(t *testing.T) {
 	})
 
 	t.Run("only one of many concurrent callers hits auth-bff", func(t *testing.T) {
-		client.Del(context.Background(), "v1:lock:refresh:"+sid)
+		client.Do(context.Background(), client.B().Del().Key("v1:lock:refresh:"+sid).Build())
 		calls.Store(0)
 
 		var wg sync.WaitGroup
@@ -1108,7 +1183,7 @@ func TestRefresh(t *testing.T) {
 }
 
 func TestRefreshFailureModes(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "G123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	seed(t, addr, sid, now+5, now+36000)
@@ -1120,9 +1195,13 @@ func TestRefreshFailureModes(t *testing.T) {
 		defer server.Close()
 
 		cfg := refreshConfig(addr, server.URL)
-		r := newRefresher(cfg, newStore(cfg))
+		s, err := newStore(cfg)
+		if err != nil {
+			t.Fatalf("newStore failed: %v", err)
+		}
+		r := newRefresher(cfg, s)
 
-		_, err := r.refresh(context.Background(), sid)
+		_, err = r.refresh(context.Background(), sid)
 		if !errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want errSessionGone", err)
 		}
@@ -1135,20 +1214,24 @@ func TestRefreshFailureModes(t *testing.T) {
 		defer server.Close()
 
 		cfg := refreshConfig(addr, server.URL)
-		r := newRefresher(cfg, newStore(cfg))
+		s, err := newStore(cfg)
+		if err != nil {
+			t.Fatalf("newStore failed: %v", err)
+		}
+		r := newRefresher(cfg, s)
 
-		_, err := r.refresh(context.Background(), sid)
+		_, err = r.refresh(context.Background(), sid)
 		if err == nil || errors.Is(err, errSessionGone) {
 			t.Errorf("err = %v, want a non-session-gone error", err)
 		}
 	})
 }
 
-func refreshConfig(redisAddr, serverURL string) *pluginConfig {
+func refreshConfig(valkeyAddr, serverURL string) *pluginConfig {
 	return &pluginConfig{
-		RedisAddr:             redisAddr,
+		ValkeyAddr:            valkeyAddr,
 		KeyPrefix:             "v1:",
-		RedisTimeoutMs:        500,
+		ValkeyTimeoutMs:       500,
 		IdleTTLSeconds:        1800,
 		RefreshURL:            serverURL + "/internal/sessions/{sid}/refresh",
 		RefreshTimeoutMs:      2000,
@@ -1158,7 +1241,7 @@ func refreshConfig(redisAddr, serverURL string) *pluginConfig {
 }
 ```
 
-The concurrency subtest depends on losers re-reading Redis rather than calling `auth-bff`. Implement it that way.
+The concurrency subtest depends on losers re-reading Valkey rather than calling `auth-bff`. Implement it that way.
 
 - [ ] **Step 2: Run the test and verify it fails**
 
@@ -1179,6 +1262,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/valkey-io/valkey-go"
 )
 
 var errSessionGone = errors.New("session gone")
@@ -1208,7 +1293,7 @@ func newRefresher(cfg *pluginConfig, s *store) *refresher {
 	}
 }
 
-// refresh serialises concurrent refreshes for one session behind a Redis lock.
+// refresh serialises concurrent refreshes for one session behind a Valkey lock.
 // The winner calls auth-bff; the losers wait and re-read the token it wrote.
 func (r *refresher) refresh(ctx context.Context, sid string) (string, error) {
 	won, err := r.acquire(ctx, sid)
@@ -1221,10 +1306,24 @@ func (r *refresher) refresh(ctx context.Context, sid string) (string, error) {
 	return r.callAuthBff(ctx, sid)
 }
 
+// acquire returns (true, nil) when this caller won the lock, and (false, nil)
+// — not an error — when SET NX found the key already held. valkey-go reports
+// a "not set" NX outcome as a nil reply, surfaced as the sentinel error
+// valkey.Nil, so it must be checked before treating err as a real failure.
 func (r *refresher) acquire(ctx context.Context, sid string) (bool, error) {
 	lockCtx, cancel := context.WithTimeout(ctx, r.store.timeout)
 	defer cancel()
-	return r.store.client.SetNX(lockCtx, r.store.prefix+"lock:refresh:"+sid, "1", r.lockTTL).Result()
+
+	lockKey := r.store.prefix + "lock:refresh:" + sid
+	cmd := r.store.client.B().Set().Key(lockKey).Value("1").Nx().Ex(r.lockTTL).Build()
+	err := r.store.client.Do(lockCtx, cmd).Error()
+	if valkey.IsValkeyNil(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *refresher) waitForOtherRefresh(ctx context.Context, sid string) (string, error) {
@@ -1349,12 +1448,12 @@ type capturedRequest struct {
 	Cookie        string
 }
 
-func handlerConfig(redisAddr string) map[string]interface{} {
+func handlerConfig(valkeyAddr string) map[string]interface{} {
 	return map[string]interface{}{
-		"redis_addr":                redisAddr,
+		"valkey_addr":               valkeyAddr,
 		"cookie_name":               "sid",
 		"key_prefix":                "v1:",
-		"redis_timeout_ms":          500,
+		"valkey_timeout_ms":         500,
 		"idle_ttl_seconds":          1800,
 		"refresh_threshold_seconds": 30,
 		"refresh_url":               "http://127.0.0.1:1/internal/sessions/{sid}/refresh",
@@ -1365,7 +1464,7 @@ func handlerConfig(redisAddr string) map[string]interface{} {
 }
 
 func TestHandlerInjectsBearerFromCookie(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "H123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	seed(t, addr, sid, now+300, now+36000)
@@ -1391,7 +1490,7 @@ func TestHandlerInjectsBearerFromCookie(t *testing.T) {
 }
 
 func TestHandlerPassesBearerThroughUntouched(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	handler, captured := buildHandler(t, handlerConfig(addr))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
@@ -1406,7 +1505,7 @@ func TestHandlerPassesBearerThroughUntouched(t *testing.T) {
 }
 
 func TestHandlerFailureModes(t *testing.T) {
-	addr := startRedis(t)
+	addr := startValkey(t)
 	sid := "J123456789012345678901234567890123456789012"
 	now := time.Now().Unix()
 	seed(t, addr, sid, now+300, now+36000)
@@ -1458,8 +1557,8 @@ func TestHandlerFailureModes(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req, redisAddr := tc.build()
-			handler, captured := buildHandler(t, handlerConfig(redisAddr))
+			req, valkeyAddr := tc.build()
+			handler, captured := buildHandler(t, handlerConfig(valkeyAddr))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -1474,9 +1573,9 @@ func TestHandlerFailureModes(t *testing.T) {
 	}
 }
 
-func TestHandlerFailsClosedWhenRedisIsDown(t *testing.T) {
+func TestHandlerFailsClosedWhenValkeyIsDown(t *testing.T) {
 	cfg := handlerConfig("127.0.0.1:1")
-	cfg["redis_timeout_ms"] = 100
+	cfg["valkey_timeout_ms"] = 100
 	handler, captured := buildHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
@@ -1489,7 +1588,7 @@ func TestHandlerFailsClosedWhenRedisIsDown(t *testing.T) {
 		t.Errorf("status = %d, want 503", rec.Code)
 	}
 	if captured.Called {
-		t.Error("backend was called while Redis was down — must fail closed")
+		t.Error("backend was called while Valkey was down — must fail closed")
 	}
 }
 ```
@@ -1518,12 +1617,15 @@ func (r registerer) registerHandlers(
 		return nil, fmt.Errorf("[%s] invalid skip_paths: %w", pluginName, err)
 	}
 
-	sessions := newStore(cfg)
+	sessions, err := newStore(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("[%s] failed to connect to valkey: %w", pluginName, err)
+	}
 	refresh := newRefresher(cfg, sessions)
 	threshold := int64(cfg.RefreshThresholdSecs)
 
 	logger.Info("plugin loaded",
-		"redis_addr", cfg.RedisAddr,
+		"valkey_addr", cfg.ValkeyAddr,
 		"cookie_name", cfg.CookieName,
 		"skip_paths", cfg.SkipPaths,
 		"allowed_origins", cfg.AllowedOrigins)
@@ -1547,7 +1649,7 @@ func (r registerer) registerHandlers(
 
 		data, err := sessions.load(ctx, sid)
 		if err != nil {
-			// Redis unreachable: fail closed. Never forward without identity.
+			// Valkey unreachable: fail closed. Never forward without identity.
 			logger.Error("session store unavailable", "path", req.URL.Path, "err", err.Error())
 			deny(w, req, http.StatusServiceUnavailable, "store_error")
 			return
@@ -1660,10 +1762,9 @@ git commit -m "feat(session-resolver): http handler with fail-closed session res
 ```json
 {
   "enabled": true,
-  "redis_addr": "redis:6379",
-  "redis_db": 0,
-  "redis_timeout_ms": 200,
-  "redis_pool_size": 50,
+  "valkey_addr": "valkey:6379",
+  "valkey_db": 0,
+  "valkey_timeout_ms": 200,
   "key_prefix": "v1:",
   "cookie_name": "sid",
   "idle_ttl_seconds": 1800,
@@ -1677,7 +1778,7 @@ git commit -m "feat(session-resolver): http handler with fail-closed session res
 }
 ```
 
-`redis_password` and `internal_secret` are absent on purpose: they are secrets and come from the environment through the template.
+`valkey_password` and `internal_secret` are absent on purpose: they are secrets and come from the environment through the template. There is no `valkey_pool_size`: see the comment on `pluginConfig` in Task 1 for why that knob does not carry over from go-redis.
 
 - [ ] **Step 2: Add the toggle to the template header**
 
@@ -1709,11 +1810,10 @@ Immediately before the `{{- if $jwtEnabled }}` config block, and update the prec
 ```
       {{- if $sessEnabled }}
       "krakend-session-resolver": {
-        "redis_addr": "{{ env "REDIS_ADDR" | default .session.redis_addr }}",
-        "redis_password": "{{ env "REDIS_PASSWORD" | default "" }}",
-        "redis_db": {{ .session.redis_db }},
-        "redis_timeout_ms": {{ .session.redis_timeout_ms }},
-        "redis_pool_size": {{ .session.redis_pool_size }},
+        "valkey_addr": "{{ env "VALKEY_ADDR" | default .session.valkey_addr }}",
+        "valkey_password": "{{ env "VALKEY_PASSWORD" | default "" }}",
+        "valkey_db": {{ .session.valkey_db }},
+        "valkey_timeout_ms": {{ .session.valkey_timeout_ms }},
         "key_prefix": "{{ .session.key_prefix }}",
         "cookie_name": "{{ env "SESSION_COOKIE_NAME" | default .session.cookie_name }}",
         "idle_ttl_seconds": {{ .session.idle_ttl_seconds }},
@@ -1901,44 +2001,44 @@ git commit -m "feat(gateway): public auth-bff routes for the session flows"
 
 ---
 
-### Task 8: Redis in compose and the environment surface
+### Task 8: Valkey in compose and the environment surface
 
 **Files:**
 - Modify: `docker-compose.yml`
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: a locally runnable gateway with Redis reachable at `redis:6379`.
+- Produces: a locally runnable gateway with Valkey reachable at `valkey:6379`.
 
-- [ ] **Step 1: Add the Redis service**
+- [ ] **Step 1: Add the Valkey service**
 
 ```yaml
-  redis:
-    image: redis:7.4-alpine
-    container_name: forgeos-gw-redis
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    container_name: forgeos-gw-valkey
     # appendonly no is deliberate: session tokens must not reach disk.
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-devpassword}", "--appendonly", "no"]
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:-devpassword}", "--appendonly", "no"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-devpassword}", "ping"]
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:-devpassword}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 ```
 
-No `ports:` mapping — Redis holds credentials and must not be reachable from the host network. Tasks that need to inspect it use `docker compose exec redis redis-cli`.
+No `ports:` mapping — Valkey holds credentials and must not be reachable from the host network. Tasks that need to inspect it use `docker compose exec valkey valkey-cli`.
 
 - [ ] **Step 2: Wire the gateway to it**
 
 In the `krakend` service, add `depends_on` and the new environment variables:
 ```yaml
     depends_on:
-      redis:
+      valkey:
         condition: service_healthy
 ```
 ```yaml
       - SESSION_ENABLED=${SESSION_ENABLED:-}
-      - REDIS_ADDR=${REDIS_ADDR:-redis:6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-devpassword}
+      - VALKEY_ADDR=${VALKEY_ADDR:-valkey:6379}
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD:-devpassword}
       - SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME:-sid}
       - AUTH_BFF_HOST=${AUTH_BFF_HOST:-http://host.docker.internal:8086}
       - AUTH_BFF_REFRESH_URL=${AUTH_BFF_REFRESH_URL:-http://host.docker.internal:8086/internal/sessions/{sid}/refresh}
@@ -1955,7 +2055,7 @@ make plugin-build
 docker compose up -d
 docker compose logs krakend | grep session-resolver
 ```
-Expected: a `plugin loaded` line naming `krakend-session-resolver`, with `redis_addr=redis:6379`.
+Expected: a `plugin loaded` line naming `krakend-session-resolver`, with `valkey_addr=valkey:6379`.
 
 - [ ] **Step 4: Verify bearer traffic is unaffected**
 
@@ -1977,7 +2077,7 @@ Expected: `401` — a well-formed but unknown session id is rejected, and the ba
 
 ```bash
 git add docker-compose.yml
-git commit -m "feat(gateway): redis service and session-resolver environment surface"
+git commit -m "feat(gateway): valkey service and session-resolver environment surface"
 ```
 
 ---
@@ -1994,7 +2094,7 @@ git commit -m "feat(gateway): redis service and session-resolver environment sur
 
 - [ ] **Step 1: Run the full path by hand**
 
-With Keycloak, Redis, `auth-bff` and the gateway all running:
+With Keycloak, Valkey, `auth-bff` and the gateway all running:
 
 ```bash
 # 1. Log in through the gateway; -c stores the cookie jar.
@@ -2028,15 +2128,15 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST -b /tmp/jar.txt \
 
 ```bash
 docker compose logs krakend | grep -ci 'sid=' || echo "no sid in gateway logs (correct)"
-docker compose exec redis redis-cli -a "$REDIS_PASSWORD" --scan --pattern 'v1:session:*'
+docker compose exec valkey valkey-cli -a "$VALKEY_PASSWORD" --scan --pattern 'v1:session:*'
 ```
-Expected: no `sid=` in logs. The Redis scan should show one key per active session.
+Expected: no `sid=` in logs. The Valkey scan should show one key per active session.
 
 - [ ] **Step 3: Verify revocation is immediate**
 
 ```bash
-SID=$(docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" --scan --pattern 'v1:session:*' | head -1 | cut -d: -f3)
-docker compose exec -T redis redis-cli -a "$REDIS_PASSWORD" DEL "v1:session:$SID"
+SID=$(docker compose exec -T valkey valkey-cli -a "$VALKEY_PASSWORD" --scan --pattern 'v1:session:*' | head -1 | cut -d: -f3)
+docker compose exec -T valkey valkey-cli -a "$VALKEY_PASSWORD" DEL "v1:session:$SID"
 curl -s -o /dev/null -w '%{http_code}\n' -b /tmp/jar.txt http://localhost:8090/api/projects
 ```
 Expected: `401` on the very next request — no cache window.
@@ -2061,7 +2161,7 @@ Expected: `401` — with the plugin disabled, cookie traffic is no longer resolv
 
 - [ ] **Step 6: Write the documentation**
 
-`docs/session-flow.md` must cover: the plugin chain order and why `session-resolver` precedes `jwt-headers`; the four flows from the spec; the `v1:` Redis contract with a pointer to `auth-bff` as its owner; every environment variable; the failure-mode table; the rollback switch; and a runbook note that a Redis outage takes down cookie traffic while bearer traffic survives.
+`docs/session-flow.md` must cover: the plugin chain order and why `session-resolver` precedes `jwt-headers`; the four flows from the spec; the `v1:` Valkey contract with a pointer to `auth-bff` as its owner; every environment variable; the failure-mode table; the rollback switch; and a runbook note that a Valkey outage takes down cookie traffic while bearer traffic survives.
 
 In `README.md`, add `session-resolver` to the plugin list and link to `docs/session-flow.md`.
 
@@ -2081,7 +2181,7 @@ git commit -m "docs: session resolution flow, contract and runbook"
 | Cookie resolves to a valid bearer | Task 5 `TestHandlerInjectsBearerFromCookie`, Task 9 Step 1.4 |
 | Bearer clients unaffected | Task 5 `TestHandlerPassesBearerThroughUntouched`, Task 9 Step 4 |
 | Backend never sees the cookie | Task 5 `TestHandlerInjectsBearerFromCookie` |
-| Fail closed on Redis outage | Task 5 `TestHandlerFailsClosedWhenRedisIsDown` |
+| Fail closed on Valkey outage | Task 5 `TestHandlerFailsClosedWhenValkeyIsDown` |
 | Absolute expiry enforced | Task 5 `TestHandlerFailureModes` |
 | CSRF rejected | Task 5 `TestHandlerFailureModes`, Task 9 Step 1.6 |
 | One refresh under concurrency | Task 4 `TestRefresh` concurrency subtest |
