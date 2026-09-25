@@ -1,11 +1,12 @@
 # Codehunters API Gateway (KrakenD)
 
-API Gateway para la plataforma Codehunters construido con [KrakenD](https://www.krakend.io/) `2.13.1`.
+API Gateway construido con [KrakenD](https://www.krakend.io/) `2.13.4`. El servicio se
+identifica como `ForgeOS API Gateway` (`config/settings/service.json`) y escucha en `:8090`.
 
 ## Estructura del Proyecto
 
 ```
-codehunters-gw-krakend/
+krakend-gateway/
 ├── endpoints.yaml                    # Fuente de verdad de los endpoints (editar aqui)
 ├── cmd/
 │   └── gen/                          # Generador Go: endpoints.yaml -> endpoints.json
@@ -14,24 +15,36 @@ codehunters-gw-krakend/
 │   └── settings/
 │       ├── endpoints.json            # GENERADO — no editar a mano (make gen)
 │       ├── service.json              # Nombre, puerto, timeouts
-│       ├── hosts.json                # Hosts de los servicios backend
+│       ├── hosts.json                # Host por defecto de forgeos
 │       ├── cors.json                 # Configuracion CORS
 │       ├── jwt.json                  # JWT/JWKS (Keycloak)
+│       ├── session.json              # Sesion en cookie via Valkey (session-resolver)
 │       ├── ip_resolver.json          # Geolocalizacion de IP
 │       ├── trace_context.json        # W3C Trace Context
+│       ├── accept_language.json      # Idioma por defecto
+│       ├── gateway_timeout.json      # Conversion de 5xx tardio a 504
 │       ├── rate_limit.json           # Rate limiting
 │       ├── logging.json              # Logging
 │       ├── metrics.json              # Metricas y telemetria
-│       └── security_headers.json     # Cabeceras de seguridad edge (HSTS, X-Frame, nosniff)
-├── plugins/
-│   ├── jwt-headers/                  # Plugin: validacion JWT + extraccion de claims
-│   ├── ip-resolver/                  # Plugin: geolocalizacion de IP via ip-api.com
-│   ├── trace-context/                # Plugin: propagacion W3C Trace Context
+│       ├── security_headers.json     # Cabeceras de seguridad edge (HSTS, X-Frame, nosniff)
+│       ├── tls.json                  # TLS del edge
+│       └── client_tls.json           # Verificacion de certs hacia backends
+├── plugins/                          # Seis plugins Go, en orden de ejecucion:
+│   ├── gateway-timeout/              #   envuelve el ciclo completo, 5xx tardio -> 504
+│   ├── accept-language/              #   Accept-Language por defecto si falta
+│   ├── trace-context/                #   propagacion W3C Trace Context
+│   ├── ip-resolver/                  #   geolocalizacion de IP via ip-api.com
+│   ├── session-resolver/             #   cookie de sesion -> Authorization: Bearer
+│   ├── jwt-headers/                  #   validacion JWT contra JWKS + claims a headers
 │   └── build/                        # Plugins compilados (.so)
+├── scripts/
+│   └── check-plugin-chain-order.sh   # Guarda el orden del chain (ver docs/session-flow.md)
 ├── docs/
-│   └── adr/                          # Architectural Decision Records (MADR)
+│   ├── adr/                          # Architectural Decision Records (MADR)
+│   └── session-flow.md               # Flujo de sesion, contrato Valkey y runbook
+├── certs/                            # Certs de desarrollo (make tls-dev-cert)
 ├── Dockerfile                        # Build multi-stage (produccion)
-├── docker-compose.yml                # Entorno de desarrollo local
+├── docker-compose.yml                # Entorno de desarrollo local (KrakenD + Valkey)
 └── Makefile                          # Comandos de build y desarrollo
 ```
 
@@ -48,8 +61,11 @@ make dev
 ```
 
 Esto ejecuta dos pasos:
-1. `plugin-build` - Compila los 3 plugins dentro de Docker (compatibles con Linux)
-2. `up` - Levanta KrakenD con `docker-compose`, montando `config/` y `plugins/build/` como volumenes
+1. `plugin-build` - Compila los 6 plugins dentro de Docker (compatibles con Linux)
+2. `up` - Levanta KrakenD y Valkey con `docker-compose`, montando `config/`, `plugins/build/` y `certs/` como volumenes
+
+`INTERNAL_SHARED_SECRET` es obligatorio: compose falla si no esta definido. Es el secreto
+que `session-resolver` presenta al endpoint interno de `auth-bff`.
 
 Si solo cambiaste configuracion (sin tocar codigo de plugins):
 
@@ -59,18 +75,22 @@ docker compose restart
 
 ### Apuntar el gateway a microservicios locales
 
-Los hosts de backend definidos en `config/settings/hosts.json` son **defaults**. Cada uno puede sobreescribirse via variable de entorno desde el shell o un `.env` junto al `docker-compose.yml`.
+Cada backend se declara en el bloque `backends` de `endpoints.yaml` con un
+`host_default` y el `host_env` que lo sobreescribe. Los tres actuales:
 
-| Envvar | Default | Override hacia el host |
-|--------|---------|-----------------------|
-| `AUTH_HOST` | `http://codehunters-ms-auth:8080` | Servicio de autenticacion |
-| `FILE_SHARE_HOST` | `http://codehunters-ms-file-share:8080` | Servicio de file share |
-| `MANAGMENT_HOST` | `http://codehunters-ms-managment:8080` | Servicio de management |
-| `NOTIFICATIONS_HOST` | `http://codehunters-ms-notifications:8080` | Servicio de notificaciones |
-| `PAYMENT_HOST` | `http://codehunters-ms-payment:8080` | Servicio de pagos |
-| `RAFFLES_HOST` | `http://codehunters-ms-raffles:8080` | Servicio de rifas |
+| Envvar | Default | Backend |
+|--------|---------|---------|
+| `FORGEOS_HOST` | `http://host.docker.internal:8080` | ForgeOS (18 endpoints) |
+| `KNOWLEDGE_MCP_HOST` | `http://host.docker.internal:8085` | Catalogo de conocimiento, MCP + REST (8) |
+| `AUTH_BFF_HOST` | `http://host.docker.internal:8086` | `auth-bff`, flujo OIDC y sesion (5) |
 
-Resolucion: el template hace `{{ env "AUTH_HOST" | default .hosts.auth }}` — si la envvar esta seteada, gana; si no, usa `hosts.json`. Compose ya las propaga al contenedor con sus defaults.
+Resolucion: el generador escribe `host_env`/`host_default` en `endpoints.json` y el
+template resuelve `{{ env $host_env | default $host_default }}` por endpoint — si la
+envvar esta seteada, gana. Compose ya las propaga con esos mismos defaults.
+`config/settings/hosts.json` solo conserva el default de `forgeos` y es vestigial.
+
+`session-resolver` habla con `auth-bff` por su cuenta, no a traves del gateway; su URL
+se controla aparte con `AUTH_BFF_REFRESH_URL`.
 
 #### Caso 1 — Micro corriendo en host local (fuera de Docker)
 
@@ -78,8 +98,8 @@ Usar `host.docker.internal` para que KrakenD dentro del contenedor llegue al pue
 
 ```bash
 # .env junto a docker-compose.yml
-AUTH_HOST=http://host.docker.internal:9095
-RAFFLES_HOST=http://host.docker.internal:9098
+FORGEOS_HOST=http://host.docker.internal:9095
+KNOWLEDGE_MCP_HOST=http://host.docker.internal:9098
 ```
 
 ```bash
@@ -92,17 +112,19 @@ Conectar el gateway a la red del micro (o viceversa) y apuntar al nombre del ser
 
 ```bash
 # .env
-AUTH_HOST=http://codehunters-ms-auth:9095
+FORGEOS_HOST=http://forgeos-api:8080
 
 # unirse a la red externa donde vive el micro
-docker network connect codehunters-ms-auth_default codehunters-gw-krakend-krakend-1
+docker network connect forgeos_default krakend-gateway-krakend-1
 ```
+
+El nombre real del contenedor sale de `docker compose ps --format '{{.Name}}'`.
 
 #### Caso 3 — Mix: gateway local + algunos micros remotos
 
 ```bash
-AUTH_HOST=http://localhost:9095 \
-RAFFLES_HOST=https://raffles.dev.codehunters.io \
+FORGEOS_HOST=http://localhost:9095 \
+KNOWLEDGE_MCP_HOST=https://knowledge.dev.example.com \
 make up
 ```
 
@@ -117,8 +139,8 @@ make generate && rg '"host"' krakend.json | sort -u
 #### Override sin contenedor (KrakenD nativo via `make run`)
 
 ```bash
-AUTH_HOST=http://localhost:9095 \
-RAFFLES_HOST=http://localhost:9098 \
+FORGEOS_HOST=http://localhost:9095 \
+KNOWLEDGE_MCP_HOST=http://localhost:9098 \
 make run
 ```
 
@@ -312,10 +334,17 @@ Cambia `"enabled"` a `true` o `false` y reinicia el gateway.
 | `x-geo-latitude` | ip-resolver | Latitud |
 | `x-geo-longitude` | ip-resolver | Longitud |
 | `x-geo-ip` | ip-resolver | IP publica resuelta |
-| `x-username` | jwt-headers | Username del token JWT |
-| `x-user-roles` | jwt-headers | Roles del usuario |
-| `x-user-id` | jwt-headers | Subject (ID) del usuario |
+| `x-username` | jwt-headers | Username del token JWT (`preferred_username`) |
+| `x-user-roles` | jwt-headers | Roles del usuario (`realm_access.roles`) |
+| `x-user-id` | jwt-headers | Subject (ID) del usuario (`sub`) |
+| `X-Organization-Id` | jwt-headers | Organizacion (`organizationId`, claim obligatorio) |
+| `x-org-slug` | jwt-headers | Slug de la organizacion (`slug`) |
 | `x-ip` | jwt-headers | IP del cliente |
+| `Authorization` | session-resolver | `Bearer` derivado de la cookie de sesion, cuando no venia uno |
+
+Los de `jwt-headers` y los `x-geo-*` se **borran** al entrar la peticion y solo se
+reescriben desde una fuente validada — el cliente no puede fijarlos. Ver
+[Seguridad en el edge](#seguridad-en-el-edge).
 
 ## Trazabilidad (W3C Trace Context)
 
@@ -528,56 +557,89 @@ Cada backend Spring Boot que tenga Micrometer Tracing u OpenTelemetry configurad
 - `Trace-Id` solo se acepta si tiene exactamente 32 caracteres hex (`[0-9a-f]{32}`). Cualquier otro formato se ignora y el gateway genera uno nuevo.
 - `Trace-Id` NO se reenvia al backend — solo se usa para construir `Traceparent`/`X-Traceparent`.
 
-## Seguridad: deuda tecnica conocida
+## Seguridad en el edge
 
-> **Aviso**: el gateway actualmente **NO valida JWT** de forma estricta. Esta seccion documenta los riesgos pendientes para que sean tratados antes de produccion.
+### Que se aplica hoy
 
-> **Cabeceras de seguridad en el edge** (Clickjacking / MITM / MIME-sniffing): pendiente de implementar via modulo `security/http`. Decision en [ADR-0001](docs/adr/0001-security-headers-edge.md).
+**Validacion de JWT.** `jwt-headers` verifica firma contra el JWKS de Keycloak
+(`keyfunc/v3`, refresco en background) y no solo el formato. Algoritmos restringidos a
+`RS256/384/512` y `ES256/384/512`, asi que `alg: none` y la confusion a HMAC quedan
+fuera. Comprueba el `issuer` cuando esta configurado y exige los `required_claims`
+(`sub`, `organizationId`). Si el JWKS aun no ha cargado responde `503` en vez de dejar
+pasar: fail-closed tambien al arrancar.
 
-### Headers de identidad spoofeables
+**Los headers de identidad no son spoofeables.** El handler de `jwt-headers` empieza
+borrando todos los headers que gestiona — los de `claims_to_headers` mas `x-ip` — y lo
+hace **antes** de los early returns de preflight y `skip_paths`. Un header de identidad
+solo puede existir si nace de un JWT validado en esta misma peticion, incluso en rutas
+publicas:
 
-CORS actual: `allow_headers: ["*"]` — el gateway acepta **cualquier header del cliente**, incluyendo browsers (no hay barrera de preflight). El cliente puede enviar los siguientes headers y el gateway los reenvia al backend sin sobrescribir cuando JWT no esta enforced:
+| Header | Claim de origen |
+|--------|-----------------|
+| `x-user-id` | `sub` |
+| `x-username` | `preferred_username` |
+| `x-user-roles` | `realm_access.roles` |
+| `X-Organization-Id` | `organizationId` |
+| `x-org-slug` | `slug` |
+| `x-ip` | resuelto por el plugin, no enviado por el cliente |
 
-| Header | Origen previsto (con JWT enforced) | Riesgo actual |
-|--------|------------------------------------|---------------|
-| `x-user-id` | Plugin `jwt-headers` (claim `sub`) | Front puede enviarlo libremente desde browser, curl o mobile. Backend NO debe usarlo para autorizacion sin re-validar el JWT. |
-| `x-user-roles` | Plugin `jwt-headers` (claim `realm_access.roles`) | Spoofeable desde browser, curl o mobile (CORS wildcard no filtra). |
-| `x-username` | Plugin `jwt-headers` (claim `preferred_username`) | Idem. |
-| `x-ip` | Plugin `jwt-headers` (`extractClientIP`) | Idem. |
-| `x-org-id` | **Sin definir** — actualmente front directo | Multi-tenant break si backend lo usa para AuthZ. |
+`ip-resolver` hace lo mismo con los suyos: borra `x-geo-country|city|latitude|longitude|ip`
+antes de escribirlos.
 
-### Mitigaciones pendientes (TODO)
+**Cabeceras de seguridad en las respuestas.** Modulo `security/http` activo — ver
+[Cabeceras de seguridad](#cabeceras-de-seguridad-configsettingssecurity_headersjson).
+Decision en [ADR-0001](docs/adr/0001-security-headers-edge.md).
 
-1. **Activar enforcement JWT real:** plugin `jwt-headers` valida formato pero los `skip_paths` aun cubren rutas que algun dia tendran identidad.
-2. **Strip de identidad en plugin:** al inicio del handler, hacer `req.Header.Del(...)` para `x-username`, `x-user-roles`, `x-ip` (y `x-user-id` cuando JWT este enforced) **antes** de leer el JWT, evitando que el cliente fuerce valores en `skip_paths`.
-3. **Mover `x-org-id` a claim JWT:** mientras venga del front es spoofeable. Configurar Keycloak para incluir `org_id` en el token y mapearlo via `claims_to_headers`.
-4. **Backends defensivos:** cada microservicio Spring Boot debe re-validar el `Authorization: Bearer ...` y NO confiar en headers `x-user-*` salvo que provengan de un canal verificado (mTLS gateway↔backend, header firmado, etc).
-5. **Restringir CORS `allow_headers`:** actualmente `["*"]`. Antes de produccion: listar explicitamente los headers permitidos (`Authorization`, `Content-Type`, `Accept`, `Traceparent`, `Trace-Id`, `x-recaptcha-*`, etc) y excluir los inyectados por plugins (`x-user-*`, `x-username`, `x-ip`, `x-geo-*`).
+**CORS restringido.** `allow_origins`, `allow_methods` y `allow_headers` son listas
+explicitas en `config/settings/cors.json`; no hay wildcard. `allow_credentials: true`
+porque la sesion viaja en cookie.
 
-### Skip paths sensibles
+**Rate limiting en dos niveles.** Servicio (500 rps, 50 por cliente) y por endpoint
+(`/auth/login/{provider}`: 20 y 5). Estrategia `ip`.
 
-`config/settings/jwt.json` exime de validacion: webhooks de pago (`smartfastpay`, `tumipay`, `mock`), endpoints publicos de auth (`login`, `register`, `refresh`, `verify/email`, `forgot-password`, `reset-password`), swagger y actuator/health. Webhooks de pago especialmente: cualquier cliente externo puede invocarlos enviando headers de identidad arbitrarios. **Validar firma de webhook (`SmartFastPay-Signature`, `x-trx-signature`) en backend es obligatorio.**
+**Sesion fail-closed.** `session-resolver` deniega ante cualquier duda y exige
+`Origin`/`Referer` permitido en metodos mutantes. Ver [`docs/session-flow.md`](docs/session-flow.md).
+
+### Rutas exentas de JWT
+
+Derivadas del spec de endpoints, no mantenidas a mano — ver
+[Rutas publicas y `skip_paths`](#rutas-publicas-y-skip_paths):
+
+```
+/public/*  /auth/login/*  /auth/callback  /auth/session  /auth/logout
+/auth/backchannel-logout  /api/ping
+```
+
+`/auth/backchannel-logout` es el canal trasero de OIDC: lo invoca Keycloak, no un
+navegador. Su `logout_token` se valida en `auth-bff` (firma, `events`, proteccion de
+replay), no en el gateway. Las demas son el flujo de login y el health check.
+
+### Lo que sigue pendiente
+
+1. **Backends defensivos.** Defensa en profundidad: cada microservicio debe re-validar
+   el `Authorization: Bearer ...` y no tratar los `x-user-*` como prueba de identidad por
+   si solos. El gateway los garantiza hoy, pero un backend accesible por otra via no
+   tiene esa garantia.
+2. **HSTS apagado.** `hsts.seconds = 0` mientras se trabaja sobre HTTP plano. Subirlo con
+   `HSTS_SECONDS` al desplegar con TLS; solo se renderiza si `tls.disabled=false`.
+3. **Falta el smoke test de ADR-0001.** El ADR pide un `curl -kI` en CI que compruebe las
+   tres cabeceras en una respuesta real. `make check` valida el render del template, que
+   no es lo mismo que verificar lo que sale por el socket.
+4. **`X-Organization-Id` en `allow_headers` es config muerta.** El plugin lo borra en toda
+   peticion, asi que permitirlo en el preflight no habilita nada. Quitarlo evita sugerir
+   que el cliente puede fijarlo.
 
 ## Configuracion
 
 La configuracion usa [KrakenD Flexible Configuration](https://www.krakend.io/docs/configuration/flexible-config/). Cada fichero `.json` en `settings/` se convierte en un namespace de variables en el template.
 
-Ficheros disponibles: `service.json`, `hosts.json`, `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
+Ficheros disponibles: `service.json`, `hosts.json`, `endpoints.json` (generado), `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `accept_language.json`, `gateway_timeout.json`, `security_headers.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
 
 ### Servicios backend
 
-Defaults en `config/settings/hosts.json`. Cada host es override-able via envvar (ver **Apuntar el gateway a microservicios locales**).
-
-| Servicio | Default | Envvar override |
-|----------|---------|-----------------|
-| Auth | `http://codehunters-ms-auth:8080` | `AUTH_HOST` |
-| File Share | `http://codehunters-ms-file-share:8080` | `FILE_SHARE_HOST` |
-| Management | `http://codehunters-ms-managment:8080` | `MANAGMENT_HOST` |
-| Notifications | `http://codehunters-ms-notifications:8080` | `NOTIFICATIONS_HOST` |
-| Payment | `http://codehunters-ms-payment:8080` | `PAYMENT_HOST` |
-| Raffles | `http://codehunters-ms-raffles:8080` | `RAFFLES_HOST` |
-
-Resolucion en `krakend.tmpl`: `{{ env "AUTH_HOST" | default .hosts.auth }}`.
+Declarados en el bloque `backends` de `endpoints.yaml`, no en `hosts.json`. Ver
+**Apuntar el gateway a microservicios locales** para la tabla de envvars y los casos de
+override.
 
 ### Rate Limiting
 
@@ -598,15 +660,22 @@ autenticacion; la lista final se compone en render-time con los estaticos de est
 fichero mas los endpoints marcados `auth: public` en `endpoints.yaml` (ver
 **Endpoints (generador)**). Soporta:
 
-- **Match exacto**: `/codehunters-ms-auth/api/v1/login`
+- **Match exacto**: `/auth/callback`
 - **Wildcard prefijo**: `/public/*` (cubre cualquier ruta bajo `/public/`)
 
-Ejemplos actuales:
+Lista renderizada hoy:
 
-- `/public/*` (todas las rutas publicas — ver seccion **Rutas publicas**)
-- `/codehunters-ms-auth/api/v1/login`, `/codehunters-ms-auth/api/v1/accounts/register`
-- `/codehunters-ms-auth/api/v1/token/refresh`, `/codehunters-ms-auth/api/v1/verify/email`
-- `*/v1/api-docs` (documentacion OpenAPI), `*/actuator/health`
+```
+/public/*  /auth/login/*  /auth/callback  /auth/session  /auth/logout
+/auth/backchannel-logout  /api/ping
+```
+
+`/public/*` es el unico estatico de `jwt.json`; el resto sale de los endpoints marcados
+`auth: public`. Comprobar la lista efectiva en cualquier momento:
+
+```bash
+make generate >/dev/null && jq -c '.extra_config."plugin/http-server"."krakend-jwt-headers".skip_paths' krakend.json
+```
 
 ## Rutas publicas (`/public/*`)
 
@@ -615,7 +684,7 @@ Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `
 ### Estrategia
 
 1. **Frontend**: cliente llama `/public/<ruta>`.
-2. **Gateway**: enruta al backend interno `/codehunters-ms-<servicio>/<ruta-real>`.
+2. **Gateway**: enruta al backend mediante el `url_pattern` del endpoint.
 3. **No-auth**: plugins JWT y IP-resolver saltean la ruta automaticamente via wildcard `/public/*`.
 4. **Auditabilidad**: cualquier endpoint publico es identificable por el prefijo en logs.
 
@@ -628,16 +697,18 @@ Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `
 
 ### Endpoints publicos actuales
 
-| Frontend                                                                  | Backend                                                                                          | Metodo |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------ |
-| `/public/v1/shared/{reference-id}/documents/{workflow-id}/presigned-url`  | `codehunters-ms-file-share` `/api/v1/shared/{reference-id}/documents/{workflow-id}/presigned-url`      | POST   |
+**Ninguno usa el prefijo `/public/`.** El wildcard sigue declarado y operativo, listo
+para el primero que lo necesite. Los endpoints publicos de hoy son el flujo de `auth-bff`
+(`/auth/login/{provider}`, `/auth/callback`, `/auth/session`, `/auth/logout`,
+`/auth/backchannel-logout`) y el health check `/api/ping` — publicos por `auth: public`
+en `endpoints.yaml`, no por prefijo.
 
 ### Wildcard skip_paths (interno)
 
 Plugins `jwt-headers` y `ip-resolver` interpretan entradas con sufijo `/*` como prefix-match:
 
 - `"/public/*"` → match todas las rutas `/public/...`
-- `"/codehunters-ms-auth/api/v1/login"` → match exacto (sin sufijo)
+- `"/auth/callback"` → match exacto (sin sufijo)
 
 Implementacion: al cargar config, las entradas `/*` se separan en lista de prefijos; en cada request se evalua exact-match O prefix-match con `strings.HasPrefix`.
 
@@ -645,9 +716,10 @@ Implementacion: al cargar config, las entradas `/*` se separan en lista de prefi
 
 | Puerto | Descripcion |
 |--------|-------------|
-| **8080** (8000 en local) | API Gateway (HTTP) |
-| **8443** (8443 en local) | API Gateway (HTTPS, opcional — ver TLS / HTTPS) |
-| **9090** (8001 en local) | Metricas (Prometheus) |
+| **8090** | API Gateway (HTTP). `service.json` → `port`; compose publica `8090:8090` |
+| **8443** | API Gateway (HTTPS, opcional — ver TLS / HTTPS) |
+| **9090** | Metricas (Prometheus). Listener propio, separado del puerto de servicio |
+| **6379** | Valkey, solo dentro de la red de compose (contenedor `forgeos-gw-valkey`) |
 
 ## TLS / HTTPS
 
@@ -753,42 +825,64 @@ El bloque HSTS solo se renderiza cuando `tls.disabled=false` (HSTS sobre HTTP pl
 
 ## Endpoints
 
-El gateway expone 57 endpoints agrupados por servicio:
+El gateway expone **31 endpoints** sobre tres backends. La fuente de verdad es
+[`endpoints.yaml`](endpoints.yaml) — esta lista se deriva de ella, asi que ante una
+discrepancia manda el fichero. Para imprimir la lista viva:
 
-### Auth Service (`codehunters-ms-auth`)
-- **POST** `/api/v1/login` - Login
-- **POST** `/api/v1/logout` - Logout
-- **POST** `/api/v1/accounts/register` - Registro de cuenta
-- **POST** `/api/v1/accounts/change-password` - Cambio de password
-- **POST** `/api/v1/token/refresh` - Refresh token
-- **POST** `/api/v1/verify/email` - Verificacion de email
-- **GET** `/api/v1/document/validate` - Validar documento
-- **GET/POST** `/api/v1/{user-id}/managers/*` - Gestion de managers
-- **POST** `/api/v1/{user-id}/bettors/register` - Registro de apostadores
-- **CRUD** `/api/v1/admin/roles` - Gestion de roles
-- **CRUD** `/api/v1/admin/permissions` - Gestion de permisos
-- **CRUD** `/api/v1/admin/roles/{roleId}/permissions` - Permisos por rol
-- **CRUD** `/api/v1/admin/users/{userId}/roles` - Roles por usuario
-- **GET** `/api/v1/admin/users/{userId}/permissions` - Permisos de usuario
-- **GET** `/v1/api-docs` - Documentacion OpenAPI
+```bash
+jq -r '.endpoints[] | "\(.method)\t\(.path)\t\(.auth)"' config/settings/endpoints.json | sort -k2
+```
 
-### File Share Service (`codehunters-ms-file-share`)
-- **GET** `/api/v1/shared/{reference-id}/documents` - Listar documentos
-- **GET** `/api/v1/shared/{reference-id}/documents/{workflow-id}` - Obtener documento
-- **POST** `/api/v1/shared/{reference-id}/documents/{workflow-id}/upload` - Subir documento
+### `auth_bff` (`AUTH_BFF_HOST`, 5 endpoints)
 
-### Raffles Service (`codehunters-ms-raffles`)
-- **POST** `/api/v1/raffles` - Crear rifa
-- **PATCH** `/api/v1/raffles/{raffleId}/info` - Actualizar info
-- **POST** `/api/v1/raffles/{raffleId}/submit-for-review` - Enviar a revision
-- **GET** `/api/v1/raffles/{raffleId}/documents` - Documentos de rifa
-- **POST** `/api/v1/raffles/{raffleId}/documents/{documentId}/review` - Revisar documento
-- **POST** `/api/v1/raffles/viability/*` - Calculos de viabilidad
-- **POST** `/api/v1/raffles/{raffleId}/prizes` - Gestionar premios
-- **GET/PATCH/POST** `/api/v1/raffles/{raffleId}/review` - Revisiones
-- **GET** `/v1/api-docs` - Documentacion OpenAPI
+Flujo OIDC y sesion respaldada por cookie. Todos publicos ante el gateway: el propio
+`auth-bff` es quien autentica. Ver [`docs/session-flow.md`](docs/session-flow.md).
 
-### Management Service (`codehunters-ms-managment`)
-- Mismos endpoints de raffles replicados para gestion administrativa
-- **GET/POST/PATCH** `/admin/uvt-config` - Configuracion UVT
-- **GET** `/v1/api-docs` - Documentacion OpenAPI
+| Metodo | Path | Auth |
+|--------|------|------|
+| GET | `/auth/login/{provider}` | public |
+| GET | `/auth/callback` | public |
+| GET | `/auth/session` | public |
+| POST | `/auth/logout` | public |
+| POST | `/auth/backchannel-logout` | public |
+
+### `forgeos` (`FORGEOS_HOST`, 18 endpoints)
+
+| Metodo | Path | Auth |
+|--------|------|------|
+| GET | `/api/ping` | public |
+| GET | `/api/organizations` | protected |
+| POST | `/api/organizations` | protected |
+| GET | `/api/organizations/{orgId}/members` | protected |
+| GET | `/api/projects` | protected |
+| POST | `/api/projects` | protected |
+| GET | `/api/projects/{projectId}/board` | protected |
+| PUT | `/api/projects/{projectId}/description` | protected |
+| GET | `/api/projects/{projectId}/hub` | protected |
+| GET | `/api/projects/{projectId}/summary` | protected |
+| GET | `/api/projects/{projectId}/refinement/turns` | protected |
+| POST | `/api/projects/{projectId}/refinement/turns` | protected |
+| GET | `/api/projects/{projectId}/refinement/stream` | protected |
+| GET | `/api/projects/{projectId}/stories` | protected |
+| POST | `/api/projects/{projectId}/stories` | protected |
+| GET | `/api/stories/{id}` | protected |
+| GET | `/api/stories/{id}/refinement/stream` | protected |
+| GET | `/api/agent-runs/{id}/stream` | protected |
+
+Los `/stream` son SSE: llevan `disable_host_sanitize` y un timeout propio que sobrevive
+al de servicio.
+
+### `knowledge` (`KNOWLEDGE_MCP_HOST`, 8 endpoints)
+
+Catalogo de conocimiento sobre MCP Streamable HTTP.
+
+| Metodo | Path | Auth |
+|--------|------|------|
+| GET | `/mcp` | protected |
+| POST | `/mcp` | protected |
+| DELETE | `/mcp` | protected |
+| GET | `/api/v1/collections` | protected |
+| GET | `/api/v1/projects` | protected |
+| POST | `/api/v1/documents` | protected |
+| POST | `/api/v1/memories` | protected |
+| POST | `/api/v1/search` | protected |

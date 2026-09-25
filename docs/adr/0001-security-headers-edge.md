@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-26
+accepted-date: 2026-09-25
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend]
@@ -75,6 +76,16 @@ HSTS de `localhost`.
 - **`krakend check -d -t -c krakend.json`** valida render del template + schema.
 - **Métrica/alerta opcional**: monitor sintético externo que verifique presencia de HSTS
   en prod (rotura = page).
+
+**Estado de la confirmación al aceptar (2026-09-25).** La decisión está implementada:
+`config/settings/security_headers.json` con `enabled: true` y el bloque `security/http`
+rendered por `config/krakend.tmpl`, emitiendo `frame_deny`, CSP `frame-ancestors 'none'`,
+`content_type_nosniff`, `browser_xss_filter` y `referrer_policy`. De los tres puntos de
+confirmación sólo el segundo está cubierto: `make check` valida el render del template y
+corre en CI en cada pull request. **El smoke test con `curl -kI` no existe** — validar el
+render no es lo mismo que comprobar lo que sale por el socket. El monitor sintético
+tampoco. `hsts.seconds` sigue en `0` porque el entorno de desarrollo va sobre HTTP plano;
+el bloque HSTS sólo se renderiza con `tls.disabled=false`.
 
 ## Pros and Cons of the Options
 

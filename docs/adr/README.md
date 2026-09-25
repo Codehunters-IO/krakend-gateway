@@ -11,4 +11,4 @@ para cambiar una decisión, escribir uno nuevo con `supersedes: NNNN`.
 
 | ADR | Título | Estado | Fecha |
 |-----|--------|--------|-------|
-| [0001](0001-security-headers-edge.md) | Cabeceras de seguridad en el edge vía `security/http` | proposed | 2026-06-26 |
+| [0001](0001-security-headers-edge.md) | Cabeceras de seguridad en el edge vía `security/http` | accepted | 2026-06-26 |
