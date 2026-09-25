@@ -6,11 +6,18 @@ on:
       - develop
       - main
 
+# The called pipeline declares contents/issues/id-token at its own top level,
+# and a caller's grant is the ceiling for everything beneath it: any permission
+# the callee declares and the caller omits aborts the run before a single job
+# starts (startup_failure, no logs, no check runs). Keep this list a superset
+# of krakend-main-pipeline.yml's own permissions block.
 permissions:
   contents: write
+  issues: write
   checks: write
   pull-requests: write
   packages: write
+  id-token: write
 
 jobs:
   validate:
