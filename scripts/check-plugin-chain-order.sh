@@ -22,6 +22,13 @@ TEMPLATE="$ROOT_DIR/config/krakend.tmpl"
 # and will not run on the glibc runner), and only the workspace is mounted
 # into it at an identical path. A $TMPDIR render would be invisible to the
 # container on one side or the other. Removed by the trap below either way.
+#
+# The contract that comes with that: mktemp creates this 0600 and owned by the
+# invoking user, and the krakend image's entrypoint su-execs to uid 1000 when
+# it starts as root. So a containerised krakend MUST run as the user that owns
+# the workspace (docker run --user "$(id -u):$(id -g)"), or the render fails
+# with "permission denied" on a file that is writable by its own owner. The CI
+# shim in .github/workflows/pull-request.yml does exactly that.
 OUT_FILE="$(mktemp "$ROOT_DIR/.krakend-chain-order.XXXXXX.json")"
 trap 'rm -f "$OUT_FILE"' EXIT
 

@@ -60,7 +60,15 @@ jobs:
           sudo tee /usr/local/bin/krakend >/dev/null <<'SHIM'
           #!/usr/bin/env bash
           set -euo pipefail
+          # --user is load-bearing. The image's entrypoint su-execs to uid 1000
+          # whenever it starts as root, while check-plugin-chain-order.sh renders
+          # FC_OUT to a mktemp file created 0600 and owned by the runner user
+          # (uid 1001). uid 1000 cannot write it, so the render dies with
+          # "permission denied" on a file that exists and is writable by its
+          # owner. Passing a non-root --user takes the entrypoint's else branch,
+          # so krakend runs as the uid that owns the workspace.
           exec docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -e FC_ENABLE -e FC_SETTINGS -e FC_OUT \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -w "$PWD" \
