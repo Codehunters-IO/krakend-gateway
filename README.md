@@ -215,8 +215,14 @@ endpoints duplicados (`method` + `path`).
 Tres capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
-2. **`make gen-check`** — drift entre YAML y JSON commiteado. Tambien corre en CI (job `endpoints-drift`).
+2. **`make gen-check`** — drift entre YAML y JSON commiteado.
 3. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+4. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+
+Las cuatro corren con `make check`, que es lo que ejecuta CI en cada PR (job
+`Gateway config check`). Ojo con la direccion de la dependencia en el
+`Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
+por si solo **no** corre las capas 3 y 4.
 
 ### Rutas publicas y `skip_paths`
 
@@ -229,6 +235,12 @@ skip_paths estaticos (jwt.json)  +  todo endpoint con auth: public
 Por eso `jwt.json` solo lleva entradas no-endpoint (globs como `/public/*`). Abrir una
 ruta se hace **solo** poniendo `auth: public` en `endpoints.yaml` — nunca editando
 `skip_paths` a mano. Asi ninguna ruta queda sin auth sin que se vea en el YAML.
+
+El plugin `session-resolver` deriva su `skip_paths` de la misma fuente
+(`session.json` + los endpoints `auth: public`). Antes era una lista escrita a
+mano: coincidian, y nada detectaba la deriva — la primera ruta publica fuera de
+`/auth/` habria devuelto `401` a un navegador con cookie sin que ningun test se
+pusiera en rojo.
 
 ### Uso directo del CLI
 
@@ -248,13 +260,28 @@ Diseno y decisiones: [`docs/superpowers/specs/2026-08-03-krakend-config-generato
 
 ## Plugins
 
-El gateway utiliza 3 plugins custom registrados como HTTP server middleware:
+El gateway utiliza varios plugins custom registrados como HTTP server middleware:
 
 | Plugin | Descripcion | Settings |
 |--------|-------------|----------|
+| **gateway-timeout** | Envuelve toda la cadena (incluido el backend); convierte un `5xx` en `504` tras `min_elapsed` transcurrido | `gateway_timeout.json` |
+| **accept-language** | Aplica un `Accept-Language` por defecto cuando el cliente no lo envia | `accept_language.json` |
 | **trace-context** | Propaga headers W3C Traceparent/Tracestate. Genera trace IDs si no existen | `trace_context.json` |
 | **ip-resolver** | Resuelve IP del cliente a geolocalizacion (pais, ciudad, coordenadas) via ip-api.com con cache | `ip_resolver.json` |
+| **session-resolver** | Lee la sesion `v1:session:{sid}` de Valkey (escrita por `auth-bff`) y la convierte en `Authorization: Bearer` antes de `jwt-headers`. Bearer entrante siempre pasa sin tocar (modo dual browser/MCP/CI) | `session.json` |
 | **jwt-headers** | Valida JWT contra JWKS de Keycloak y mapea claims a headers HTTP (x-username, x-user-roles, x-user-id) | `jwt.json` |
+
+Orden de ejecucion real (izquierda = primero en ver la peticion):
+`gateway-timeout → accept-language → trace-context → ip-resolver → session-resolver → jwt-headers`.
+KrakenD ejecuta el array `plugin/http-server.name` de `config/krakend.tmpl`
+en el orden **inverso** al declarado — ver la seccion de orden de cadena en
+[`docs/session-flow.md`](docs/session-flow.md) antes de tocar ese array.
+
+`session-resolver` implementa el patron Token Handler / BFF: el navegador solo
+ve una cookie `HttpOnly`, nunca el JWT. Orden de cadena, los cuatro flujos
+(login, request autenticado, refresh perezoso, logout), el contrato de
+Valkey y el runbook completo estan en
+[`docs/session-flow.md`](docs/session-flow.md).
 
 ### Habilitar / Deshabilitar plugins
 
@@ -535,7 +562,7 @@ CORS actual: `allow_headers: ["*"]` — el gateway acepta **cualquier header del
 
 La configuracion usa [KrakenD Flexible Configuration](https://www.krakend.io/docs/configuration/flexible-config/). Cada fichero `.json` en `settings/` se convierte en un namespace de variables en el template.
 
-Ficheros disponibles: `service.json`, `hosts.json`, `cors.json`, `jwt.json`, `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
+Ficheros disponibles: `service.json`, `hosts.json`, `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
 
 ### Servicios backend
 
@@ -620,7 +647,7 @@ Implementacion: al cargar config, las entradas `/*` se separan en lista de prefi
 |--------|-------------|
 | **8080** (8000 en local) | API Gateway (HTTP) |
 | **8443** (8443 en local) | API Gateway (HTTPS, opcional — ver TLS / HTTPS) |
-| **8090** (8001 en local) | Metricas (Prometheus) |
+| **9090** (8001 en local) | Metricas (Prometheus) |
 
 ## TLS / HTTPS
 
@@ -669,7 +696,7 @@ Estructura de `keys[]` (cada entrada):
 ### Notas operativas
 
 - **Puerto unico**: KrakenD escucha en un solo puerto (`service.port = 8080`). Activar TLS hace que ese mismo puerto sirva HTTPS — no coexisten HTTP y HTTPS simultaneamente. El mapeo `8443:8080` en `docker-compose.yml` solo es relevante con TLS activo.
-- **Endpoint de metricas (`8090`)**: listener separado, no hereda TLS. Si necesitas TLS en metricas, configuralo aparte.
+- **Endpoint de metricas (`9090`)**: listener separado, no hereda TLS ni comparte puerto con el servicio principal (`config/settings/metrics.json`). Si necesitas TLS en metricas, configuralo aparte.
 - **Rotacion de certificados**: KrakenD carga los certs al arrancar. Cambiar el cert requiere reinicio del contenedor.
 - **CORS**: si los clientes pasan de `http://` a `https://`, actualiza `allow_origins` en `config/settings/cors.json` para incluir el origen HTTPS.
 - **mTLS**: `enable_mtls` + `ca_certs` activan validacion de cliente, pero la distribucion de certs de cliente queda fuera del alcance de este repo.

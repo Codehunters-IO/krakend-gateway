@@ -6,11 +6,18 @@ on:
       - develop
       - main
 
+# The called pipeline declares contents/issues/id-token at its own top level,
+# and a caller's grant is the ceiling for everything beneath it: any permission
+# the callee declares and the caller omits aborts the run before a single job
+# starts (startup_failure, no logs, no check runs). Keep this list a superset
+# of krakend-main-pipeline.yml's own permissions block.
 permissions:
   contents: write
+  issues: write
   checks: write
   pull-requests: write
   packages: write
+  id-token: write
 
 jobs:
   validate:
@@ -21,8 +28,8 @@ jobs:
       run_test: true
     secrets: inherit
 
-  endpoints-drift:
-    name: Endpoints config in sync
+  gateway-config:
+    name: Gateway config check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +42,45 @@ jobs:
       - name: Test the generator
         run: cd cmd/gen && go test ./...
 
-      - name: Verify endpoints.json is in sync with endpoints.yaml
-        run: make gen-check
+      - name: Install jq
+        run: |
+          command -v jq >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
+          jq --version
+
+      # KrakenD's official binary is CGO-linked against musl (it has to be, to
+      # load Go plugins), so it cannot just be copied out of the image onto a
+      # glibc runner. Shim it to its own image instead, mounting the workspace
+      # at an identical path so every path the Makefile and
+      # scripts/check-plugin-chain-order.sh use resolves the same inside and
+      # out. Pinned to the tag the Dockerfile ships, so CI checks the config
+      # against the runtime that will actually parse it.
+      - name: Install the krakend binary
+        run: |
+          docker pull -q krakend:2.13.4
+          sudo tee /usr/local/bin/krakend >/dev/null <<'SHIM'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          # --user is load-bearing. The image's entrypoint su-execs to uid 1000
+          # whenever it starts as root, while check-plugin-chain-order.sh renders
+          # FC_OUT to a mktemp file created 0600 and owned by the runner user
+          # (uid 1001). uid 1000 cannot write it, so the render dies with
+          # "permission denied" on a file that exists and is writable by its
+          # owner. Passing a non-root --user takes the entrypoint's else branch,
+          # so krakend runs as the uid that owns the workspace.
+          exec docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e FC_ENABLE -e FC_SETTINGS -e FC_OUT \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$PWD" \
+            krakend:2.13.4 "$@"
+          SHIM
+          sudo chmod +x /usr/local/bin/krakend
+          krakend version
+
+      # make check is the whole gate: endpoints.json drift against
+      # endpoints.yaml, the KrakenD schema, and the plugin/http-server chain
+      # order. Running gen-check alone left the chain-order guard — the one
+      # property that already broke silently — running nowhere but a
+      # developer's laptop.
+      - name: Validate the gateway configuration
+        run: make check

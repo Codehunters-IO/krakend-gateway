@@ -3,6 +3,7 @@
 {{- $tcEnabled := eq (env "TRACE_CONTEXT_ENABLED" | default (printf "%v" .trace_context.enabled)) "true" -}}
 {{- $irEnabled := eq (env "IP_RESOLVER_ENABLED" | default (printf "%v" .ip_resolver.enabled)) "true" -}}
 {{- $jwtEnabled := eq (env "JWT_ENABLED" | default (printf "%v" .jwt.enabled)) "true" -}}
+{{- $sessEnabled := eq (env "SESSION_ENABLED" | default (printf "%v" .session.enabled)) "true" -}}
 {{- $shEnabled := eq (env "SECURITY_HEADERS_ENABLED" | default (printf "%v" .security_headers.enabled)) "true" -}}
 {
   "$schema": "https://www.krakend.io/schema/krakend.json",
@@ -38,41 +39,93 @@
   },
   "extra_config": {
     "plugin/http-server": {
+      {{/* KrakenD's plugin/http-server executes plugins in the REVERSE of
+           their declared order: each entry wraps the ones declared before
+           it, so for name:[A,B,C] the composition is C(B(A(router))) — C
+           (declared LAST) runs FIRST, A (declared first) runs last, closest
+           to the router. Confirmed empirically in this repo, not just cited
+           from docs (see the chain-order section of docs/session-flow.md
+           for the A/B evidence): declaring this array in chain order
+           (session-resolver before jwt-headers, as written) made
+           jwt-headers execute FIRST and reject every cookie-only request
+           before session-resolver ever saw it — silently, since krakend
+           check still says "Syntax OK!" and every plugin still logs
+           "plugin loaded". This array is declared in the REVERSE of the
+           intended request-time chain (jwt-headers first, gateway-timeout
+           last) so the actual execution order matches: gateway-timeout ->
+           accept-language -> trace-context -> ip-resolver ->
+           session-resolver -> jwt-headers. If you touch this array, keep it
+           reversed and re-run the seeded-session check in
+           docs/session-flow.md afterward. */}}
       "name": [
-        {{- if $gtEnabled }}
-        "krakend-gateway-timeout"{{ if or $alEnabled $tcEnabled $irEnabled $jwtEnabled }},{{ end }}
+        {{- if $jwtEnabled }}
+        "krakend-jwt-headers"{{ if or $sessEnabled $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
-        {{- if $alEnabled }}
-        "krakend-accept-language"{{ if or $tcEnabled $irEnabled $jwtEnabled }},{{ end }}
-        {{- end }}
-        {{- if $tcEnabled }}
-        "krakend-trace-context"{{ if or $irEnabled $jwtEnabled }},{{ end }}
+        {{- if $sessEnabled }}
+        "krakend-session-resolver"{{ if or $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
         {{- if $irEnabled }}
-        "krakend-ip-resolver"{{ if $jwtEnabled }},{{ end }}
+        "krakend-ip-resolver"{{ if or $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
-        {{- if $jwtEnabled }}
-        "krakend-jwt-headers"
+        {{- if $tcEnabled }}
+        "krakend-trace-context"{{ if or $alEnabled $gtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $alEnabled }}
+        "krakend-accept-language"{{ if $gtEnabled }},{{ end }}
+        {{- end }}
+        {{- if $gtEnabled }}
+        "krakend-gateway-timeout"
         {{- end }}
       ]
-      {{- if or $gtEnabled $alEnabled $irEnabled $jwtEnabled }},{{ end }}
+      {{- if or $gtEnabled $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- if $gtEnabled }}
       "krakend-gateway-timeout": {
         "trigger_status": {{ .gateway_timeout.trigger_status }},
         "timeout_status": {{ .gateway_timeout.timeout_status }},
         "min_elapsed": "{{ env "GATEWAY_TIMEOUT_MIN_ELAPSED" | default .gateway_timeout.min_elapsed }}"
-      }{{ if or $alEnabled $irEnabled $jwtEnabled }},{{ end }}
+      }{{ if or $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $alEnabled }}
       "krakend-accept-language": {
         "default_value": "{{ .accept_language.default_value }}"
-      }{{ if or $irEnabled $jwtEnabled }},{{ end }}
+      }{{ if or $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $irEnabled }}
       "krakend-ip-resolver": {
         "api_base_url": "{{ .ip_resolver.api_base_url }}",
         "cache_ttl_minutes": {{ .ip_resolver.cache_ttl_minutes }},
         "skip_paths": {{ marshal .ip_resolver.skip_paths }}
+      }{{ if or $sessEnabled $jwtEnabled }},{{ end }}
+      {{- end }}
+      {{- if $sessEnabled }}
+      "krakend-session-resolver": {
+        "valkey_addr": "{{ env "VALKEY_ADDR" | default .session.valkey_addr }}",
+        "valkey_password": "{{ env "VALKEY_PASSWORD" | default "" }}",
+        "valkey_db": {{ .session.valkey_db }},
+        "valkey_timeout_ms": {{ .session.valkey_timeout_ms }},
+        "key_prefix": "{{ .session.key_prefix }}",
+        "cookie_name": "{{ env "SESSION_COOKIE_NAME" | default .session.cookie_name }}",
+        "idle_ttl_seconds": {{ .session.idle_ttl_seconds }},
+        "refresh_threshold_seconds": {{ .session.refresh_threshold_seconds }},
+        "refresh_url": "{{ env "AUTH_BFF_REFRESH_URL" | default .session.refresh_url }}",
+        "refresh_timeout_ms": {{ .session.refresh_timeout_ms }},
+        "refresh_lock_ttl_seconds": {{ .session.refresh_lock_ttl_seconds }},
+        "internal_secret": "{{ env "INTERNAL_SHARED_SECRET" | default "" }}",
+        "allowed_origins": {{ env "SESSION_ALLOWED_ORIGINS" | default (join "," .session.allowed_origins) | splitList "," | marshal }},
+        "csrf_safe_methods": {{ marshal .session.csrf_safe_methods }},
+        {{/* skip_paths is DERIVED from the same endpoint spec jwt-headers
+             derives its own from (see the block below), plus whatever extra
+             literals session.json lists. Hand-maintaining a second list here
+             meant the two adjacent plugins could silently disagree about
+             which paths are public: the first public endpoint added outside
+             /auth/ would keep its jwt-headers exemption but lose its
+             session-resolver one, and a browser carrying a stale cookie
+             would get a 401 on a route that is supposed to be open, with
+             nothing going red. One source of truth instead:
+             endpoints.yaml -> endpoints.json -> both plugins. */}}
+        {{- $sessionSkip := .session.skip_paths }}
+        {{- range .endpoints.endpoints }}{{ if eq .auth "public" }}{{ $sessionSkip = append $sessionSkip (regexReplaceAll "\\{[^}]+\\}" .path "*") }}{{ end }}{{ end }}
+        "skip_paths": {{ marshal $sessionSkip }}
       }{{ if $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $jwtEnabled }}
@@ -83,7 +136,7 @@
         "claims_to_headers": {{ marshal .jwt.claims_to_headers }},
         "skip_paths": [
           {{- range $i, $p := .jwt.skip_paths }}{{ if $i }},{{ end }}"{{ $p }}"{{ end }}
-          {{- range .endpoints.endpoints }}{{ if eq .auth "public" }},"{{ .path }}"{{ end }}{{ end }}
+          {{- range .endpoints.endpoints }}{{ if eq .auth "public" }},"{{ regexReplaceAll "\\{[^}]+\\}" .path "*" }}"{{ end }}{{ end }}
         ],
         "required_claims": {{ marshal .jwt.required_claims }},
         "roles_claim": "{{ .jwt.roles_claim }}",
@@ -99,7 +152,7 @@
       {{- end }}
     },
     "security/cors": {
-      "allow_origins": {{ marshal .cors.allow_origins }},
+      "allow_origins": {{ env "CORS_ALLOW_ORIGINS" | default (join "," .cors.allow_origins) | splitList "," | marshal }},
       "allow_methods": {{ marshal .cors.allow_methods }},
       "allow_headers": {{ marshal .cors.allow_headers }},
       "expose_headers": {{ marshal .cors.expose_headers }},

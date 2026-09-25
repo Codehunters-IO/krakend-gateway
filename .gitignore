@@ -34,3 +34,6 @@ plugins/build/
 
 # Claude Code context
 .claude/
+
+# Transient render written by scripts/check-plugin-chain-order.sh
+.krakend-chain-order.*

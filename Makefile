@@ -8,7 +8,7 @@ BUILDER_IMAGE = krakend/builder:2.13.4
 LOCAL_BUILDER_IMAGE = codehunters-plugin-builder:local
 KRAKEND_IMAGE = krakend:2.13.4
 
-PLUGINS = jwt-headers ip-resolver trace-context accept-language gateway-timeout
+PLUGINS = jwt-headers ip-resolver trace-context accept-language gateway-timeout session-resolver
 
 CERTS_DIR = certs
 TLS_CN ?= localhost
@@ -33,6 +33,7 @@ check: gen-check ## Validate KrakenD configuration (regen + drift + schema)
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
 	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
+	@./scripts/check-plugin-chain-order.sh
 
 generate: ## Generate the final krakend.json from templates
 	@FC_ENABLE=1 \
