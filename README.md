@@ -275,7 +275,7 @@ pusiera en rojo.
 `make gen` es lo normal. Invocacion directa (el modulo vive en `cmd/gen`, sin go.mod raiz):
 
 ```bash
-cd cmd/gen && go run . <entrada.yaml> <salida.json>
+cd cmd/gen && go run . -products=a,b <entrada.yaml> <salida.json>
 cd cmd/gen && go test ./...        # tests del generador
 ```
 
@@ -283,6 +283,11 @@ Los argumentos son obligatorios en la practica: los defaults del binario
 (`endpoints.yaml` → `config/settings/endpoints.json`) se resuelven contra el
 directorio actual, y el modulo obliga a ejecutar desde `cmd/gen`. Por eso el target
 `gen` del Makefile pasa rutas absolutas (`$(CURDIR)/...`).
+
+`-products=a,b` va **antes** de las rutas posicionales: el paquete `flag` de Go deja de
+parsear en el primer argumento que no sea flag, asi que puesto despues se ignora en
+silencio. Omitirlo o pasarlo vacio carga todos los productos; una corrida filtrada
+escribe el marcador `filtered_products` (ver "Cargar un subconjunto de productos" arriba).
 
 Diseno y decisiones: [`docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md`](docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md).
 
