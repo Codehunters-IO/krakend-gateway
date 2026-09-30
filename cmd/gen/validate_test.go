@@ -129,6 +129,27 @@ func TestValidate_NoProductsBlockStillValid(t *testing.T) {
 	}
 }
 
+func TestValidate_CrossProductPathCollision(t *testing.T) {
+	s := withProducts()
+	s.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"} // same namespace as forgeos
+	s.Endpoints = append(s.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	assertErrContains(t, Validate(s), "duplicate endpoint")
+}
+
+func TestValidate_SamePathDifferentPrefixIsNotCollision(t *testing.T) {
+	s := withProducts()
+	s.Endpoints = append(s.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("/api/ping and /vitxo/api/ping must coexist, got %v", errs)
+	}
+}
+
 func assertErrContains(t *testing.T, errs []error, want string) {
 	t.Helper()
 	for _, e := range errs {

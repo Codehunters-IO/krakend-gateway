@@ -63,7 +63,10 @@ func Validate(spec Spec) []error {
 		if e.Auth != "public" && e.Auth != "protected" {
 			errs = append(errs, fmt.Errorf("%s: invalid auth %q", where, e.Auth))
 		}
-		key := e.Method + " " + e.Path
+		// Key on the EXPOSED path. Two products can each declare /api/ping as long as
+		// their prefixes differ; with equal prefixes it is a real collision, and
+		// KrakenD would silently serve whichever endpoint it saw first.
+		key := e.Method + " " + spec.Products[e.Product].Prefix + e.Path
 		if seen[key] {
 			errs = append(errs, fmt.Errorf("%s: duplicate endpoint", where))
 		}
