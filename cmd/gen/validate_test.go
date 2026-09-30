@@ -154,6 +154,42 @@ func TestValidate_SamePathDifferentPrefixIsNotCollision(t *testing.T) {
 	}
 }
 
+// Guards the coupling Important 3 (final fix wave) removed: before the
+// exposedPath extraction, Validate's collision key and Normalize's Path were
+// two independent derivations that only agreed by construction (one guarded
+// on `ok`, the other relied on a missing-key zero value). This drives both
+// real entry points — not a reimplementation of the formula — from one spec
+// with a non-empty prefix, so it fails if either call site stops deriving
+// the exposed path the same way as the other.
+func TestValidateAndNormalize_AgreeOnExposedPath(t *testing.T) {
+	distinct := withProducts()
+	distinct.Products["vitxo"] = Product{Prefix: "/vitxo", Backend: "forgeos"}
+	distinct.Endpoints = append(distinct.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	if errs := Validate(distinct); len(errs) != 0 {
+		t.Fatalf("different prefixes must not collide, got %v", errs)
+	}
+	norm := Normalize(distinct)
+	if norm[0].Path == norm[1].Path {
+		t.Fatalf("Normalize collapsed two endpoints Validate treated as distinct: both %q", norm[0].Path)
+	}
+
+	colliding := withProducts()
+	colliding.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"} // same namespace as forgeos
+	colliding.Endpoints = append(colliding.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	assertErrContains(t, Validate(colliding), "duplicate endpoint")
+	normColliding := Normalize(colliding)
+	if normColliding[0].Path != normColliding[1].Path {
+		t.Fatalf("Validate flagged a collision Normalize does not reproduce: %q vs %q",
+			normColliding[0].Path, normColliding[1].Path)
+	}
+}
+
 func assertErrContains(t *testing.T, errs []error, want string) {
 	t.Helper()
 	for _, e := range errs {

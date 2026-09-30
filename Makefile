@@ -32,9 +32,9 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 gen: ## Regenerate $(ENDPOINTS_JSON) from $(ENDPOINTS_SPEC) (PRODUCTS= filters)
-	@cd $(GEN_DIR) && go run . $(if $(PRODUCTS),-products=$(PRODUCTS),) "$(CURDIR)/$(ENDPOINTS_SPEC)" "$(CURDIR)/$(ENDPOINTS_JSON)"
+	@cd $(GEN_DIR) && go run . $(if $(PRODUCTS),"-products=$(PRODUCTS)",) "$(CURDIR)/$(ENDPOINTS_SPEC)" "$(CURDIR)/$(ENDPOINTS_JSON)"
 
-gen-check: ## Fail if endpoints.json is out of sync with endpoints.yaml
+gen-check: ## Fail if endpoints.json is out of sync with endpoints.yaml (refuses to run with PRODUCTS set)
 	@if [ -n "$(PRODUCTS)" ]; then \
 		echo "gen-check: refusing to run with PRODUCTS=$(PRODUCTS)."; \
 		echo "  The committed endpoints.json is always the full set, so a drift check"; \

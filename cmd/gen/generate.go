@@ -26,7 +26,9 @@ func Generate(in []byte) ([]byte, error) {
 }
 
 // GenerateWithProducts is Generate restricted to the named products. A nil or
-// empty list means all of them.
+// empty list means all of them. The output is a JSON object with 2-space
+// indentation and no trailing newline — the committed endpoints.json must
+// stay byte-identical, so that contract is binding, not cosmetic.
 func GenerateWithProducts(in []byte, products []string) ([]byte, error) {
 	var spec Spec
 	if err := yaml.Unmarshal(in, &spec); err != nil {
@@ -67,7 +69,9 @@ func checkProductsExist(spec Spec, products []string) error {
 // Endpoint value, including Product, into its output, and json:"-" only keeps
 // the field out of the emitted JSON, not out of the struct in memory. So there
 // is no positional correspondence between a declared and a normalized slice to
-// maintain here, and no invariant for a future change to Normalize to break.
+// maintain here. The invariant "Normalize must not clear Product" still holds;
+// what changed is that breaking it now fails loudly (routes vanish from the
+// filtered output) instead of silently misattributing routes to the wrong product.
 func filterByProducts(normalized []Endpoint, products []string) []Endpoint {
 	wanted := make(map[string]bool, len(products))
 	for _, name := range products {

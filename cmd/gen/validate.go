@@ -9,15 +9,6 @@ var validMethods = map[string]bool{
 	"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true,
 }
 
-// effectiveBackend resolves the backend key for an endpoint: its own if set,
-// otherwise its product's default. Empty means unresolvable.
-func effectiveBackend(spec Spec, e Endpoint) string {
-	if e.Backend != "" {
-		return e.Backend
-	}
-	return spec.Products[e.Product].Backend
-}
-
 // validPrefix accepts "" or a path starting with "/" and not ending in one.
 // A trailing slash would concatenate into "//api/...", a route that looks
 // reachable in the config and is not the one anybody meant.
@@ -63,10 +54,11 @@ func Validate(spec Spec) []error {
 		if e.Auth != "public" && e.Auth != "protected" {
 			errs = append(errs, fmt.Errorf("%s: invalid auth %q", where, e.Auth))
 		}
-		// Key on the EXPOSED path. Two products can each declare /api/ping as long as
-		// their prefixes differ; with equal prefixes it is a real collision, and
-		// KrakenD would silently serve whichever endpoint it saw first.
-		key := e.Method + " " + spec.Products[e.Product].Prefix + e.Path
+		// Key on the EXPOSED path (exposedPath, shared with Normalize). Two products
+		// can each declare /api/ping as long as their prefixes differ; with equal
+		// prefixes it is a real collision, and KrakenD would silently serve whichever
+		// endpoint it saw first.
+		key := e.Method + " " + exposedPath(spec, e)
 		if seen[key] {
 			errs = append(errs, fmt.Errorf("%s: duplicate endpoint", where))
 		}
