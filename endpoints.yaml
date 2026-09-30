@@ -64,6 +64,20 @@ x-header-sets:
     - Tracestate
     - X-Traceparent
 
+# A product is the unit of loading: `make dev PRODUCTS=forgeos` generates a gateway
+# carrying only its endpoints. `prefix` is prepended to the exposed path and never
+# reaches the backend, so today's three products keep prefix "" and no route moves.
+products:
+  forgeos:
+    prefix: ""
+    backend: forgeos
+  knowledge:
+    prefix: ""
+    backend: knowledge
+  platform:
+    prefix: ""
+    backend: auth_bff
+
 backends:
   forgeos:
     host_default: http://host.docker.internal:8080
@@ -92,6 +106,7 @@ endpoints:
   - path: /auth/login/{provider}
     method: GET
     backend: auth_bff
+    product: platform
     auth: public
     input_headers: *auth
     rate_limit:
@@ -105,6 +120,7 @@ endpoints:
   - path: /auth/callback
     method: GET
     backend: auth_bff
+    product: platform
     auth: public
     timeout: 10s
     input_headers: *auth
@@ -123,12 +139,14 @@ endpoints:
   - path: /auth/session
     method: GET
     backend: auth_bff
+    product: platform
     auth: public
     input_headers: *auth
 
   - path: /auth/logout
     method: POST
     backend: auth_bff
+    product: platform
     auth: public
     timeout: 10s
     input_headers: *auth
@@ -138,6 +156,7 @@ endpoints:
   - path: /auth/backchannel-logout
     method: POST
     backend: auth_bff
+    product: platform
     auth: public
     timeout: 10s
     input_headers:
@@ -150,90 +169,105 @@ endpoints:
   - path: /api/ping
     method: GET
     backend: forgeos
+    product: forgeos
     auth: public
     input_headers: *anonymous
 
   - path: /api/organizations
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/organizations
     method: POST
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/organizations/{orgId}/members
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects
     method: POST
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/hub
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/summary
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/description
     method: PUT
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/stories
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/stories
     method: POST
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/board
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/refinement/turns
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/projects/{projectId}/refinement/turns
     method: POST
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
   - path: /api/stories/{id}
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     input_headers: *identity
 
@@ -242,6 +276,7 @@ endpoints:
   - path: /api/projects/{projectId}/refinement/stream
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     timeout: 3600s
     disable_host_sanitize: true
@@ -250,6 +285,7 @@ endpoints:
   - path: /api/stories/{id}/refinement/stream
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     timeout: 3600s
     disable_host_sanitize: true
@@ -258,6 +294,7 @@ endpoints:
   - path: /api/agent-runs/{id}/stream
     method: GET
     backend: forgeos
+    product: forgeos
     auth: protected
     timeout: 3600s
     disable_host_sanitize: true
@@ -269,6 +306,7 @@ endpoints:
   - path: /mcp
     method: POST
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 120s
     disable_host_sanitize: true
@@ -277,6 +315,7 @@ endpoints:
   - path: /mcp
     method: GET
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 3600s
     disable_host_sanitize: true
@@ -285,6 +324,7 @@ endpoints:
   - path: /mcp
     method: DELETE
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 30s
     input_headers: *mcp
@@ -293,6 +333,7 @@ endpoints:
   - path: /api/v1/search
     method: POST
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 60s
     input_headers: *identity
@@ -301,6 +342,7 @@ endpoints:
   - path: /api/v1/documents
     method: POST
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 300s
     input_headers: *identity
@@ -308,6 +350,7 @@ endpoints:
   - path: /api/v1/memories
     method: POST
     backend: knowledge
+    product: knowledge
     auth: protected
     timeout: 60s
     input_headers: *identity
@@ -315,11 +358,13 @@ endpoints:
   - path: /api/v1/collections
     method: GET
     backend: knowledge
+    product: knowledge
     auth: protected
     input_headers: *identity
 
   - path: /api/v1/projects
     method: GET
     backend: knowledge
+    product: knowledge
     auth: protected
     input_headers: *identity
