@@ -218,7 +218,7 @@ endpoints:
 |-------|-------------|-------------|
 | `path` | si | Ruta expuesta. Debe empezar por `/` |
 | `method` | si | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
-| `backend` | si | Clave de `backends` |
+| `backend` | si, salvo que el `product` del endpoint tenga `backend` propio | Clave de `backends` |
 | `auth` | si | `public` o `protected`. `public` anade el path a `skip_paths` del plugin JWT |
 | `input_headers` | si | Headers que llegan al backend. Explicito por endpoint (auditabilidad) |
 | `product` | si, cuando existe el bloque `products` | Clave de `products` a la que pertenece el endpoint |

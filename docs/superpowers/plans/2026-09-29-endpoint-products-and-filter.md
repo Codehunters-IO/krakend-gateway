@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let `endpoints.yaml` group endpoints by product, give each product an optional URL prefix, and let `make dev PRODUCTS=forgeos` generate a gateway carrying only that product's routes.
+**Goal:** Let `endpoints.yaml` group endpoints by product, give each product an optional URL prefix, and let `make gen PRODUCTS=forgeos` generate a gateway carrying only that product's routes.
 
 **Architecture:** The generator (`cmd/gen`, four small Go files plus `main.go`) gains a `products` map. Each endpoint declares its product; the product supplies a default backend and an optional path prefix. The prefix is applied to the exposed `path` only — `url_pattern` keeps the unprefixed backend path, so KrakenD strips the prefix for free and the template needs no change. A `-products` flag filters the generated set. The whole `products` block is optional: a spec without it behaves exactly as today, which is what keeps the existing golden fixture valid.
 
@@ -779,9 +779,11 @@ cp config/settings/endpoints.json /tmp/endpoints-before.json
 In `endpoints.yaml`, immediately above `backends:`:
 
 ```yaml
-# A product is the unit of loading: `make dev PRODUCTS=forgeos` generates a gateway
-# carrying only its endpoints. `prefix` is prepended to the exposed path and never
-# reaches the backend, so today's three products keep prefix "" and no route moves.
+# A product is the unit of loading. PRODUCTS is consumed by gen/check, not dev:
+# to load a subset, run `make gen PRODUCTS=a,b` then `make dev` — dev does not
+# regenerate endpoints.json, it uses what's on disk. `prefix` is prepended to the
+# exposed path and never reaches the backend, so today's three products keep
+# prefix "" and no route moves.
 products:
   forgeos:
     prefix: ""
