@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Defaults resolve relative to the repo root (where `make gen` runs).
@@ -13,19 +15,22 @@ const (
 )
 
 func main() {
+	products := flag.String("products", "", "comma-separated product names to load; empty loads all")
+	flag.Parse()
+
 	in, out := defaultIn, defaultOut
-	if len(os.Args) > 1 {
-		in = os.Args[1]
-	}
-	if len(os.Args) > 2 {
-		out = os.Args[2]
+	if args := flag.Args(); len(args) > 0 {
+		in = args[0]
+		if len(args) > 1 {
+			out = args[1]
+		}
 	}
 	raw, err := os.ReadFile(in)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "read:", err)
 		os.Exit(1)
 	}
-	j, err := Generate(raw)
+	j, err := GenerateWithProducts(raw, splitProducts(*products))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "generate:\n"+err.Error())
 		os.Exit(1)
@@ -35,6 +40,22 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("wrote %s (%d endpoints)\n", out, countEndpoints(j))
+}
+
+// splitProducts turns "a,b" into ["a","b"] and "" into nil, trimming spaces so
+// PRODUCTS="forgeos, vitxo" behaves the way anyone would expect from a Make variable.
+func splitProducts(csv string) []string {
+	if strings.TrimSpace(csv) == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // countEndpoints reports how many endpoints the generated document holds.
