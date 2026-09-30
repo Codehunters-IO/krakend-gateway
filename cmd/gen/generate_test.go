@@ -116,21 +116,19 @@ func TestGenerateWithProducts_EmptyResultErrors(t *testing.T) {
 	}
 }
 
-// Fix round 1: filterByProducts must not trust that normalized and spec.Endpoints
-// have the same length. A mismatch would otherwise index out of range, or worse,
-// silently attribute an endpoint to the wrong product.
-func TestFilterByProducts_LengthMismatchErrors(t *testing.T) {
-	spec := Spec{
-		Endpoints: []Endpoint{
-			{Path: "/api/ping", Method: "GET", Product: "forgeos"},
-			{Path: "/api/orders", Method: "POST", Product: "vitxo"},
-		},
-	}
+// Fix round 2: filterByProducts selects by each endpoint's own Product field,
+// with no spec argument at all — there is no positional correspondence to a
+// declared slice to get wrong, so this is possible without a spec in hand.
+func TestFilterByProducts_SelectsByEndpointsOwnProduct(t *testing.T) {
 	normalized := []Endpoint{
-		{Path: "/api/ping", Method: "GET"},
+		{Path: "/api/ping", Method: "GET", Product: "forgeos"},
+		{Path: "/vitxo/api/orders", Method: "POST", Product: "vitxo"},
 	}
-	_, err := filterByProducts(spec, normalized, []string{"forgeos"})
-	if err == nil {
-		t.Fatal("want error for mismatched slice lengths, got nil")
+	kept := filterByProducts(normalized, []string{"vitxo"})
+	if len(kept) != 1 {
+		t.Fatalf("want 1 endpoint, got %d", len(kept))
+	}
+	if kept[0].Path != "/vitxo/api/orders" {
+		t.Errorf("path: got %v", kept[0].Path)
 	}
 }
