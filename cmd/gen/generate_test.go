@@ -115,3 +115,22 @@ func TestGenerateWithProducts_EmptyResultErrors(t *testing.T) {
 		t.Errorf("error must say the gateway would have no routes: %v", err)
 	}
 }
+
+// Fix round 1: filterByProducts must not trust that normalized and spec.Endpoints
+// have the same length. A mismatch would otherwise index out of range, or worse,
+// silently attribute an endpoint to the wrong product.
+func TestFilterByProducts_LengthMismatchErrors(t *testing.T) {
+	spec := Spec{
+		Endpoints: []Endpoint{
+			{Path: "/api/ping", Method: "GET", Product: "forgeos"},
+			{Path: "/api/orders", Method: "POST", Product: "vitxo"},
+		},
+	}
+	normalized := []Endpoint{
+		{Path: "/api/ping", Method: "GET"},
+	}
+	_, err := filterByProducts(spec, normalized, []string{"forgeos"})
+	if err == nil {
+		t.Fatal("want error for mismatched slice lengths, got nil")
+	}
+}

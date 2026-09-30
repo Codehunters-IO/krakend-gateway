@@ -40,7 +40,11 @@ func GenerateWithProducts(in []byte, products []string) ([]byte, error) {
 		if err := checkProductsExist(spec, products); err != nil {
 			return nil, err
 		}
-		out.Endpoints = filterByProducts(spec, out.Endpoints, products)
+		kept, err := filterByProducts(spec, out.Endpoints, products)
+		if err != nil {
+			return nil, err
+		}
+		out.Endpoints = kept
 		if len(out.Endpoints) == 0 {
 			return nil, fmt.Errorf("products %v select no endpoints: the gateway would have no routes", products)
 		}
@@ -65,7 +69,19 @@ func checkProductsExist(spec Spec, products []string) error {
 // filterByProducts keeps the endpoints whose product is named, preserving order.
 // It indexes the normalized list against the spec by position, which Normalize
 // guarantees: it returns endpoints in input order.
-func filterByProducts(spec Spec, normalized []Endpoint, products []string) []Endpoint {
+//
+// The length check converts a silent misattribution of endpoints to the wrong
+// product into an immediate, loud failure. Without it, a future change to
+// Normalize that broke the one-output-per-input invariant would either panic
+// (normalized longer than spec.Endpoints) or, worse, pair each normalized
+// endpoint with the wrong spec.Endpoints[i].Product and filter in silence —
+// the gateway would boot fine and serve someone else's routes.
+func filterByProducts(spec Spec, normalized []Endpoint, products []string) ([]Endpoint, error) {
+	if len(normalized) != len(spec.Endpoints) {
+		return nil, fmt.Errorf(
+			"filterByProducts: Normalize must return one endpoint per input in input order, got %d normalized for %d declared",
+			len(normalized), len(spec.Endpoints))
+	}
 	wanted := make(map[string]bool, len(products))
 	for _, name := range products {
 		wanted[name] = true
@@ -76,5 +92,5 @@ func filterByProducts(spec Spec, normalized []Endpoint, products []string) []End
 			kept = append(kept, e)
 		}
 	}
-	return kept
+	return kept, nil
 }
