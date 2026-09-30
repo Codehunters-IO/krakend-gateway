@@ -710,7 +710,12 @@ git commit -m "feat(gen): -products filter with an explicit marker on partial bu
 In `Makefile`, below `ENDPOINTS_JSON`:
 
 ```make
-# Empty loads every product. `make dev PRODUCTS=forgeos` loads one.
+# Consumed by gen/check to filter which products are included in endpoints.json.
+# Empty (default) includes all products. To load a subset locally, run:
+#   make gen PRODUCTS=a,b
+# Then start the stack:
+#   make dev
+# Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 ```
 
@@ -894,16 +899,22 @@ Add a subsection after "Anadir o cambiar un endpoint":
 ```markdown
 ### Cargar un subconjunto de productos
 
+`PRODUCTS` lo consumen `gen`/`gen-check`, no `dev`: `dev: plugin-build up`, y ninguno de
+los dos targets depende de `gen`, `generate` ni `check`, asi que `PRODUCTS` no se aplica
+por ese camino. Para cargar un subconjunto son dos pasos explicitos:
+
 ```bash
-make dev                           # todos los productos
-make dev PRODUCTS=forgeos          # solo forgeos
-make dev PRODUCTS=forgeos,platform # forgeos + el flujo de login
+make gen                           # todos los productos (default)
+make gen PRODUCTS=forgeos          # solo forgeos
+make gen PRODUCTS=forgeos,platform # forgeos + el flujo de login
+make dev                           # o `make up` si los plugins ya estan compilados
 ```
 
-Una generacion filtrada escribe `filtered_products` en `endpoints.json`, que es el set
-**completo** cuando se commitea. `make gen-check` se niega a correr con `PRODUCTS` puesto, y
-`make gen` sin filtro restaura el fichero. Si un `endpoints.json` filtrado se cuela en un
-commit, el `gen-check` de CI lo caza por drift.
+`make dev` no regenera nada — usa lo que haya en disco. Una generacion filtrada escribe
+`filtered_products` en `endpoints.json`, que es el set **completo** cuando se commitea.
+`make gen-check` se niega a correr con `PRODUCTS` puesto, y `make gen` sin filtro
+restaura el fichero. Si un `endpoints.json` filtrado se cuela en un commit, el
+`gen-check` de CI lo caza por drift.
 ```
 
 - [ ] **Step 3: Add the variable to the command table**
@@ -933,3 +944,7 @@ git commit -m "docs: document endpoint products and PRODUCTS filtering"
   from `url_pattern`, which is exactly why the prefix costs nothing.
 - **No removal of the now-redundant `backend:` lines** on the 31 endpoints. Mentioned in Task 6,
   deliberately left for a separate commit so the migration diff stays reviewable.
+- **The `make dev PRODUCTS=...` examples in this plan were wrong.** `dev: plugin-build up`, and
+  neither `dev` nor `up` depends on `gen`, `generate` or `check`, so `PRODUCTS` is never consumed
+  on that path. Corrected to the two-step form (`make gen PRODUCTS=a,b` then `make dev`/`make up`)
+  during execution of Task 7.
