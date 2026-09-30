@@ -129,6 +129,10 @@ func TestValidate_NoProductsBlockStillValid(t *testing.T) {
 	}
 }
 
+// Verifies that a genuine collision (equal prefixes, same path) is still detected.
+// Both endpoints resolve to the same exposed path here, so this passes identically
+// with and without the prefix in the duplicate key. The differential guard for
+// prefix-aware logic is TestValidate_SamePathDifferentPrefixIsNotCollision.
 func TestValidate_CrossProductPathCollision(t *testing.T) {
 	s := withProducts()
 	s.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"} // same namespace as forgeos
