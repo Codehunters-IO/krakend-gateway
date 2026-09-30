@@ -228,8 +228,11 @@ endpoints:
 | `disable_host_sanitize` | no | `true` para streams SSE |
 | `output_encoding` / `encoding` | no | Default: los de `defaults` |
 | `rate_limit` | no | `max_rate`, `client_max_rate`, `strategy` por endpoint |
-| `products.<n>.prefix` | no | Se antepone a la ruta expuesta, nunca al `url_pattern`. `""` o ruta con `/` inicial y sin `/` final |
-| `products.<n>.backend` | no | Backend por defecto del producto; el `backend` del endpoint gana |
+
+| Campo de `products.<n>` | Obligatorio | Descripcion |
+|--------------------------|-------------|-------------|
+| `prefix` | no | Se antepone a la ruta expuesta, nunca al `url_pattern`. `""` o ruta con `/` inicial y sin `/` final |
+| `backend` | no | Backend por defecto del producto; el `backend` del endpoint gana |
 
 Los header sets repetidos se factorizan con anchors YAML (`&identity` / `*identity`).
 Cualquier clave top-level `x-*` se ignora — es scaffolding del propio fichero.
@@ -237,10 +240,16 @@ Cualquier clave top-level `x-*` se ignora — es scaffolding del propio fichero.
 ### Validacion
 
 `make gen` aborta y reporta **todos** los errores de una pasada: path sin `/` inicial,
-metodo desconocido, backend no declarado, `input_headers` vacio, `auth` invalido y
-endpoints duplicados (`method` + `path`).
+metodo desconocido, backend no declarado, `input_headers` vacio, `auth` invalido,
+endpoints duplicados (`method` + `prefix` + `path`), prefijo de producto invalido,
+`product` requerido cuando existe el bloque `products`, `product` no declarado y
+backend no resoluble (ni en el endpoint ni en el producto).
 
-Tres capas de validacion en total:
+Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar —
+la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
+`""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
+
+Cuatro capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
