@@ -18,7 +18,12 @@ GEN_DIR = cmd/gen
 ENDPOINTS_SPEC = endpoints.yaml
 ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 
-# Empty loads every product. `make dev PRODUCTS=forgeos` loads one.
+# Consumed by gen/check to filter which products are included in endpoints.json.
+# Empty (default) includes all products. To load a subset locally, run:
+#   make gen PRODUCTS=a,b
+# Then start the stack:
+#   make dev
+# Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
 .PHONY: help check run build generate gen gen-check clean plugin-build plugin-check up down logs dev builder tls-dev-cert tls-clean
