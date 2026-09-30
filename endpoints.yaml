@@ -64,9 +64,11 @@ x-header-sets:
     - Tracestate
     - X-Traceparent
 
-# A product is the unit of loading: `make dev PRODUCTS=forgeos` generates a gateway
-# carrying only its endpoints. `prefix` is prepended to the exposed path and never
-# reaches the backend, so today's three products keep prefix "" and no route moves.
+# A product is the unit of loading. PRODUCTS is consumed by gen/check, not dev:
+# to load a subset, run `make gen PRODUCTS=a,b` then `make dev` — dev does not
+# regenerate endpoints.json, it uses what's on disk. `prefix` is prepended to the
+# exposed path and never reaches the backend, so today's three products keep
+# prefix "" and no route moves.
 products:
   forgeos:
     prefix: ""
