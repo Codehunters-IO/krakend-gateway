@@ -6,6 +6,14 @@ type Backend struct {
 	HostEnv     string `yaml:"host_env" json:"host_env"`
 }
 
+// Product groups endpoints that belong to one application. Prefix is prepended to
+// the exposed path only, never to url_pattern, so the backend never sees it.
+// Backend is the default for the product's endpoints; an endpoint may override it.
+type Product struct {
+	Prefix  string `yaml:"prefix"`
+	Backend string `yaml:"backend"`
+}
+
 // Defaults are applied to endpoints that omit the corresponding field.
 type Defaults struct {
 	OutputEncoding string `yaml:"output_encoding"`
@@ -26,6 +34,7 @@ type Endpoint struct {
 	Path                string     `yaml:"path" json:"path"`
 	Method              string     `yaml:"method" json:"method"`
 	Backend             string     `yaml:"backend" json:"-"`
+	Product             string     `yaml:"product" json:"-"`
 	Auth                string     `yaml:"auth" json:"auth"`
 	URLPattern          string     `yaml:"url_pattern" json:"url_pattern"`
 	OutputEncoding      string     `yaml:"output_encoding" json:"output_encoding"`
@@ -41,6 +50,7 @@ type Endpoint struct {
 
 // Spec is the full endpoints.yaml document.
 type Spec struct {
+	Products  map[string]Product `yaml:"products"`
 	Backends  map[string]Backend `yaml:"backends"`
 	Defaults  Defaults           `yaml:"defaults"`
 	Endpoints []Endpoint         `yaml:"endpoints"`
