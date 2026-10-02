@@ -6,7 +6,38 @@ consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos]
 ---
 
-# ADR-0002: Edge de plataforma compartido + Keycloak global con realm-por-producto (validación multi-realm por prefijo en el edge)
+# ADR-0002: Edge de plataforma compartido + Keycloak global con realm-por-producto
+
+## Enmienda (2026-09-29)
+
+El mecanismo de selección de realm que eligió este ADR —**match por prefijo de ruta**— quedó
+sustituido por **ligadura ruta→realm generada desde el bloque `products` de `endpoints.yaml`**.
+El diseño que lo sustituye está en
+[`2026-09-29-multi-realm-jwt-design.md`](../superpowers/specs/2026-09-29-multi-realm-jwt-design.md),
+bajo `docs/superpowers/specs/`.
+
+Motivo: seleccionar el realm por prefijo obliga a que cada producto viva bajo su propio prefijo
+de URL. El SPA de ForgeOS ya consume `/api/*` en producción, así que aplicar prefijos habría
+exigido migrar sus rutas a `/forgeos/api/*` y romper el cliente en marcha. La ligadura por ruta
+no necesita prefijo: `forgeos` sigue sirviendo `/api/*` sin cambios.
+
+Lo que **cambia** respecto al texto de abajo:
+
+- El título pierde «(validación multi-realm por prefijo en el edge)».
+- La tabla `realms[]` deja de llevar `prefix` y de resolverse por longest-prefix. El realm lo
+  decide la ruta, desde configuración generada, y el token solo se le pide que coincida vía
+  `WithIssuer`.
+
+Lo que **se mantiene**, y es la sustancia del ADR: realm por producto, un IdP, un edge, el
+rollout incremental 1→2→3, y Keycloak en su propio host (se sigue rechazando la opción 5).
+
+El spec añade además una restricción de seguridad que este ADR no contemplaba: el realm **nunca**
+se deriva de un claim del token. Derivar la URL del JWKS de un `iss` no verificado deja que el
+atacante apunte la obtención de la clave a su propio servidor y firme sus tokens. La clave la
+elige la ruta; el token no influye en quién lo verifica.
+
+Este ADR sigue en `status: proposed`, así que se edita en sitio en vez de escribir un
+`supersedes`. Al pasar a `accepted` debe incorporar esta enmienda al cuerpo.
 
 ## Context and Problem Statement
 
@@ -62,6 +93,9 @@ Decisiones acompañantes que forman parte de este outcome:
   El plugin selecciona el realm por el prefijo de ruta, valida contra ese JWKS e inyecta los
   headers de ese realm. Se rechaza la opción 4 (instancia por producto) por multiplicar la
   operación (N despliegues, N configs) sin ganar aislamiento real de identidad.
+  > **Enmendado (2026-09-29).** El `prefix` y el longest-prefix desaparecen: el realm se liga a
+  > la ruta desde configuración generada. Ver «Enmienda» arriba. El rechazo de la opción 4 sigue
+  > vigente.
 - **Rollout incremental 1→2→3**, cada paso aislado del trabajo de producto en curso:
   1. **Edge ForgeOS single-realm** — gateway `:8090` fronta `/api/*` → backend `:8080`, realm
      `forgeos`. El plugin ya hace single-realm → sin tocar Go. Prueba el edge end-to-end.
