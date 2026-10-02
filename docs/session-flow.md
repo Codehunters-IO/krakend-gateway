@@ -102,10 +102,17 @@ five bystanders benefits from or is neutral to the new order:
   correctly — this was arguably broken before.
 - **`accept-language`** and **`trace-context`** now run earlier relative to
   the auth plugins. `trace-context` running ahead of every deny path (it
-  did not before) means a request rejected by `jwt-headers` or
-  `session-resolver` now carries a trace id in the gateway's own logs
-  instead of only trace-less rejections — previously-untraceable 401s
-  become traceable.
+  did not before) means a rejected request reaches the deny with its
+  `Traceparent` and `X-Traceparent` headers already set, and
+  `trace-context` has already emitted its own `trace resolved` line
+  carrying `traceId`, `method`, `path`, `source` and `client_ip`. So a
+  401 that used to leave no trace at all now leaves one.
+  **The rejection line itself still does not carry the trace id:**
+  `jwt-headers`' `invalid token` and `session-resolver`'s `request denied`
+  log `path`, `method`, `status` and `outcome` only. Correlating a
+  rejection with its trace means matching method, path and timestamp
+  across two lines — there is no shared request id in the log fields.
+  Threading `traceId` into the deny logs is the fix; it has not been done.
 - **`ip-resolver`** still runs, and now runs earlier, before both auth
   plugins that consume its output (`jwt-headers`' `x-ip` header and any
   future consumer). Its anti-spoof header strip stays ahead of every
