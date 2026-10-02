@@ -2,11 +2,10 @@
 
 - **Date:** 2026-09-29
 - **Status:** approved for planning
-- **Amends:** ADR-0002, *Edge de plataforma compartido + Keycloak global con realm-por-producto*.
-  Still `proposed` and **not yet on `main`** — it lives in PR #1, branch
-  `docs/adr-0002-platform-edge`, as
-  `docs/adr/0002-platform-edge-global-keycloak-realm-per-product.md`. The link is deliberately
-  not a relative path: it would be broken until that PR merges.
+- **Amends:** [ADR-0002](../../adr/0002-platform-edge-global-keycloak-realm-per-product.md),
+  *Edge de plataforma compartido + Keycloak global con realm-por-producto*. Merged to `main` on
+  2026-10-02 (PR #1) and still `status: proposed`, so it carries this amendment in its own
+  «Enmienda» section rather than being superseded by a new ADR.
 - **Depends on:** the `products` block in `endpoints.yaml` (separate, smaller deliverable — see §2)
 
 ## 1. Context and problem
