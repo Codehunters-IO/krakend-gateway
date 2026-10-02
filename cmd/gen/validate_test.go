@@ -56,6 +56,140 @@ func TestValidate_BadAuth(t *testing.T) {
 	assertErrContains(t, Validate(s), "invalid auth")
 }
 
+func withProducts() Spec {
+	s := base()
+	s.Products = map[string]Product{
+		"forgeos": {Prefix: "", Backend: "forgeos"},
+		"vitxo":   {Prefix: "/vitxo", Backend: "forgeos"},
+	}
+	s.Endpoints[0].Product = "forgeos"
+	s.Endpoints[0].Backend = ""
+	return s
+}
+
+func TestValidate_ProductsOK(t *testing.T) {
+	if errs := Validate(withProducts()); len(errs) != 0 {
+		t.Fatalf("want no errors, got %v", errs)
+	}
+}
+
+func TestValidate_UnknownProduct(t *testing.T) {
+	s := withProducts()
+	s.Endpoints[0].Product = "nope"
+	assertErrContains(t, Validate(s), `product "nope" not declared`)
+}
+
+// Review Focus 5: products present, endpoint omits product.
+func TestValidate_ProductRequiredWhenProductsDeclared(t *testing.T) {
+	s := withProducts()
+	s.Endpoints[0].Product = ""
+	assertErrContains(t, Validate(s), "product required")
+}
+
+// Review Focus 3: a trailing slash would generate //api/...
+func TestValidate_PrefixTrailingSlash(t *testing.T) {
+	s := withProducts()
+	s.Products["vitxo"] = Product{Prefix: "/vitxo/", Backend: "forgeos"}
+	assertErrContains(t, Validate(s), "invalid prefix")
+}
+
+func TestValidate_PrefixMissingLeadingSlash(t *testing.T) {
+	s := withProducts()
+	s.Products["vitxo"] = Product{Prefix: "vitxo", Backend: "forgeos"}
+	assertErrContains(t, Validate(s), "invalid prefix")
+}
+
+func TestValidate_EmptyPrefixIsValid(t *testing.T) {
+	s := withProducts()
+	s.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"}
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("empty prefix must be valid, got %v", errs)
+	}
+}
+
+func TestValidate_ProductSuppliesBackend(t *testing.T) {
+	s := withProducts()
+	s.Endpoints[0].Backend = "" // resolved from the product
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("product backend must satisfy the backend rule, got %v", errs)
+	}
+}
+
+func TestValidate_ProductBackendMustExist(t *testing.T) {
+	s := withProducts()
+	s.Products["forgeos"] = Product{Prefix: "", Backend: "ghost"}
+	s.Endpoints[0].Backend = ""
+	assertErrContains(t, Validate(s), `backend "ghost" not declared`)
+}
+
+// Back-compat: no products block at all stays valid.
+func TestValidate_NoProductsBlockStillValid(t *testing.T) {
+	if errs := Validate(base()); len(errs) != 0 {
+		t.Fatalf("spec without products must stay valid, got %v", errs)
+	}
+}
+
+// Verifies that a genuine collision (equal prefixes, same path) is still detected.
+// Both endpoints resolve to the same exposed path here, so this passes identically
+// with and without the prefix in the duplicate key. The differential guard for
+// prefix-aware logic is TestValidate_SamePathDifferentPrefixIsNotCollision.
+func TestValidate_CrossProductPathCollision(t *testing.T) {
+	s := withProducts()
+	s.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"} // same namespace as forgeos
+	s.Endpoints = append(s.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	assertErrContains(t, Validate(s), "duplicate endpoint")
+}
+
+func TestValidate_SamePathDifferentPrefixIsNotCollision(t *testing.T) {
+	s := withProducts()
+	s.Endpoints = append(s.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("/api/ping and /vitxo/api/ping must coexist, got %v", errs)
+	}
+}
+
+// Guards the coupling Important 3 (final fix wave) removed: before the
+// exposedPath extraction, Validate's collision key and Normalize's Path were
+// two independent derivations that only agreed by construction (one guarded
+// on `ok`, the other relied on a missing-key zero value). This drives both
+// real entry points — not a reimplementation of the formula — from one spec
+// with a non-empty prefix, so it fails if either call site stops deriving
+// the exposed path the same way as the other.
+func TestValidateAndNormalize_AgreeOnExposedPath(t *testing.T) {
+	distinct := withProducts()
+	distinct.Products["vitxo"] = Product{Prefix: "/vitxo", Backend: "forgeos"}
+	distinct.Endpoints = append(distinct.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	if errs := Validate(distinct); len(errs) != 0 {
+		t.Fatalf("different prefixes must not collide, got %v", errs)
+	}
+	norm := Normalize(distinct)
+	if norm[0].Path == norm[1].Path {
+		t.Fatalf("Normalize collapsed two endpoints Validate treated as distinct: both %q", norm[0].Path)
+	}
+
+	colliding := withProducts()
+	colliding.Products["vitxo"] = Product{Prefix: "", Backend: "forgeos"} // same namespace as forgeos
+	colliding.Endpoints = append(colliding.Endpoints, Endpoint{
+		Path: "/api/ping", Method: "GET", Product: "vitxo", Auth: "public",
+		InputHeaders: []string{"Accept"},
+	})
+	assertErrContains(t, Validate(colliding), "duplicate endpoint")
+	normColliding := Normalize(colliding)
+	if normColliding[0].Path != normColliding[1].Path {
+		t.Fatalf("Validate flagged a collision Normalize does not reproduce: %q vs %q",
+			normColliding[0].Path, normColliding[1].Path)
+	}
+}
+
 func assertErrContains(t *testing.T, errs []error, want string) {
 	t.Helper()
 	for _, e := range errs {

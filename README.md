@@ -164,6 +164,7 @@ make build
 | `make plugin-build` | Compila todos los plugins con Docker |
 | `make plugin-check` | Verifica que plugins + config son validos |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
+| `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
 | `make check` | `gen-check` + valida la configuracion KrakenD |
 | `make generate` | Genera el `krakend.json` final desde templates |
@@ -190,9 +191,33 @@ mano no sirve — el proximo `make gen` lo sobrescribe y `make check` falla por 
 3. `make check` — valida drift + schema KrakenD.
 4. Commitear `endpoints.yaml` **y** `config/settings/endpoints.json` juntos.
 
+### Cargar un subconjunto de productos
+
+`PRODUCTS` lo consumen `gen`/`gen-check`, no `dev`: `dev: plugin-build up`, y ninguno de
+los dos targets depende de `gen`, `generate` ni `check`, asi que `PRODUCTS` no se aplica
+por ese camino. Para cargar un subconjunto son dos pasos explicitos:
+
+```bash
+make gen                           # todos los productos (default)
+make gen PRODUCTS=forgeos          # solo forgeos
+make gen PRODUCTS=forgeos,platform # forgeos + el flujo de login
+make dev                           # o `make up` si los plugins ya estan compilados
+```
+
+`make dev` no regenera nada — usa lo que haya en disco. Una generacion filtrada escribe
+`filtered_products` en `endpoints.json`, que es el set **completo** cuando se commitea.
+`make gen-check` se niega a correr con `PRODUCTS` puesto, y `make gen` sin filtro
+restaura el fichero. Si un `endpoints.json` filtrado se cuela en un commit, el
+`gen-check` de CI lo caza por drift.
+
 ### Esquema de `endpoints.yaml`
 
 ```yaml
+products:                              # unidad de carga; PRODUCTS= filtra por estas claves
+  forgeos:
+    prefix: ""                         # "" o ruta con / inicial y sin / final
+    backend: forgeos                   # default para sus endpoints
+
 backends:                              # hosts logicos, referenciados por clave
   forgeos:
     host_default: http://host.docker.internal:8080
@@ -215,9 +240,10 @@ endpoints:
 |-------|-------------|-------------|
 | `path` | si | Ruta expuesta. Debe empezar por `/` |
 | `method` | si | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
-| `backend` | si | Clave de `backends` |
+| `backend` | si, salvo que el `product` del endpoint tenga `backend` propio | Clave de `backends` |
 | `auth` | si | `public` o `protected`. `public` anade el path a `skip_paths` del plugin JWT |
 | `input_headers` | si | Headers que llegan al backend. Explicito por endpoint (auditabilidad) |
+| `product` | si, cuando existe el bloque `products` | Clave de `products` a la que pertenece el endpoint |
 | `url_pattern` | no | Ruta en el backend. Default: igual que `path` |
 | `input_query_strings` | no | Query params reenviados |
 | `timeout` | no | Override del timeout de servicio (ej. `3600s` para SSE) |
@@ -225,16 +251,27 @@ endpoints:
 | `output_encoding` / `encoding` | no | Default: los de `defaults` |
 | `rate_limit` | no | `max_rate`, `client_max_rate`, `strategy` por endpoint |
 
+| Campo de `products.<n>` | Obligatorio | Descripcion |
+|--------------------------|-------------|-------------|
+| `prefix` | no | Se antepone a la ruta expuesta, nunca al `url_pattern`. `""` o ruta con `/` inicial y sin `/` final |
+| `backend` | no | Backend por defecto del producto; el `backend` del endpoint gana |
+
 Los header sets repetidos se factorizan con anchors YAML (`&identity` / `*identity`).
 Cualquier clave top-level `x-*` se ignora — es scaffolding del propio fichero.
 
 ### Validacion
 
 `make gen` aborta y reporta **todos** los errores de una pasada: path sin `/` inicial,
-metodo desconocido, backend no declarado, `input_headers` vacio, `auth` invalido y
-endpoints duplicados (`method` + `path`).
+metodo desconocido, backend no declarado, `input_headers` vacio, `auth` invalido,
+endpoints duplicados (`method` + `prefix` + `path`), prefijo de producto invalido,
+`product` requerido cuando existe el bloque `products`, `product` no declarado y
+backend no resoluble (ni en el endpoint ni en el producto).
 
-Tres capas de validacion en total:
+Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar —
+la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
+`""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
+
+Cuatro capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
@@ -269,7 +306,7 @@ pusiera en rojo.
 `make gen` es lo normal. Invocacion directa (el modulo vive en `cmd/gen`, sin go.mod raiz):
 
 ```bash
-cd cmd/gen && go run . <entrada.yaml> <salida.json>
+cd cmd/gen && go run . -products=a,b <entrada.yaml> <salida.json>
 cd cmd/gen && go test ./...        # tests del generador
 ```
 
@@ -277,6 +314,11 @@ Los argumentos son obligatorios en la practica: los defaults del binario
 (`endpoints.yaml` → `config/settings/endpoints.json`) se resuelven contra el
 directorio actual, y el modulo obliga a ejecutar desde `cmd/gen`. Por eso el target
 `gen` del Makefile pasa rutas absolutas (`$(CURDIR)/...`).
+
+`-products=a,b` va **antes** de las rutas posicionales: el paquete `flag` de Go deja de
+parsear en el primer argumento que no sea flag, asi que puesto despues se ignora en
+silencio. Omitirlo o pasarlo vacio carga todos los productos; una corrida filtrada
+escribe el marcador `filtered_products` (ver "Cargar un subconjunto de productos" arriba).
 
 Diseno y decisiones: [`docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md`](docs/superpowers/specs/2026-08-03-krakend-config-generator-design.md).
 
