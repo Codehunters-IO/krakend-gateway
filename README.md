@@ -19,7 +19,6 @@ krakend-gateway/
 │       ├── cors.json                 # Configuracion CORS
 │       ├── jwt.json                  # JWT/JWKS (Keycloak)
 │       ├── session.json              # Sesion en cookie via Valkey (session-resolver)
-│       ├── ip_resolver.json          # Geolocalizacion de IP
 │       ├── trace_context.json        # W3C Trace Context
 │       ├── accept_language.json      # Idioma por defecto
 │       ├── gateway_timeout.json      # Conversion de 5xx tardio a 504
@@ -29,11 +28,10 @@ krakend-gateway/
 │       ├── security_headers.json     # Cabeceras de seguridad edge (HSTS, X-Frame, nosniff)
 │       ├── tls.json                  # TLS del edge
 │       └── client_tls.json           # Verificacion de certs hacia backends
-├── plugins/                          # Seis plugins Go, en orden de ejecucion:
+├── plugins/                          # Cinco plugins Go, en orden de ejecucion:
 │   ├── gateway-timeout/              #   envuelve el ciclo completo, 5xx tardio -> 504
 │   ├── accept-language/              #   Accept-Language por defecto si falta
 │   ├── trace-context/                #   propagacion W3C Trace Context
-│   ├── ip-resolver/                  #   geolocalizacion de IP via ip-api.com
 │   ├── session-resolver/             #   cookie de sesion -> Authorization: Bearer
 │   ├── jwt-headers/                  #   validacion JWT contra JWKS + claims a headers
 │   └── build/                        # Plugins compilados (.so)
@@ -61,7 +59,7 @@ make dev
 ```
 
 Esto ejecuta dos pasos:
-1. `plugin-build` - Compila los 6 plugins dentro de Docker (compatibles con Linux)
+1. `plugin-build` - Compila los 5 plugins dentro de Docker (compatibles con Linux)
 2. `up` - Levanta KrakenD y Valkey con `docker-compose`, montando `config/`, `plugins/build/` y `certs/` como volumenes
 
 `INTERNAL_SHARED_SECRET` es obligatorio: compose falla si no esta definido. Es el secreto
@@ -331,12 +329,11 @@ El gateway utiliza varios plugins custom registrados como HTTP server middleware
 | **gateway-timeout** | Envuelve toda la cadena (incluido el backend); convierte un `5xx` en `504` tras `min_elapsed` transcurrido | `gateway_timeout.json` |
 | **accept-language** | Aplica un `Accept-Language` por defecto cuando el cliente no lo envia | `accept_language.json` |
 | **trace-context** | Propaga headers W3C Traceparent/Tracestate. Genera trace IDs si no existen | `trace_context.json` |
-| **ip-resolver** | Resuelve IP del cliente a geolocalizacion (pais, ciudad, coordenadas) via ip-api.com con cache | `ip_resolver.json` |
 | **session-resolver** | Lee la sesion `v1:session:{sid}` de Valkey (escrita por `auth-bff`) y la convierte en `Authorization: Bearer` antes de `jwt-headers`. Bearer entrante siempre pasa sin tocar (modo dual browser/MCP/CI) | `session.json` |
 | **jwt-headers** | Valida JWT contra JWKS de Keycloak y mapea claims a headers HTTP (x-username, x-user-roles, x-user-id) | `jwt.json` |
 
 Orden de ejecucion real (izquierda = primero en ver la peticion):
-`gateway-timeout → accept-language → trace-context → ip-resolver → session-resolver → jwt-headers`.
+`gateway-timeout → accept-language → trace-context → session-resolver → jwt-headers`.
 KrakenD ejecuta el array `plugin/http-server.name` de `config/krakend.tmpl`
 en el orden **inverso** al declarado — ver la seccion de orden de cadena en
 [`docs/session-flow.md`](docs/session-flow.md) antes de tocar ese array.
@@ -355,9 +352,6 @@ Cada plugin tiene un campo `enabled` en su fichero de settings:
 // config/settings/trace_context.json
 { "enabled": true }
 
-// config/settings/ip_resolver.json
-{ "enabled": false, ... }
-
 // config/settings/jwt.json
 { "enabled": true, ... }
 ```
@@ -371,11 +365,6 @@ Cambia `"enabled"` a `true` o `false` y reinicia el gateway.
 | `Traceparent` | trace-context | ID de traza W3C (front + backend) |
 | `Tracestate` | trace-context | Estado de traza W3C |
 | `X-Traceparent` | trace-context | Copia del Traceparent con prefijo `x-`, solo backend |
-| `x-geo-country` | ip-resolver | Pais del cliente |
-| `x-geo-city` | ip-resolver | Ciudad del cliente |
-| `x-geo-latitude` | ip-resolver | Latitud |
-| `x-geo-longitude` | ip-resolver | Longitud |
-| `x-geo-ip` | ip-resolver | IP publica resuelta |
 | `x-username` | jwt-headers | Username del token JWT (`preferred_username`) |
 | `x-user-roles` | jwt-headers | Roles del usuario (`realm_access.roles`) |
 | `x-user-id` | jwt-headers | Subject (ID) del usuario (`sub`) |
@@ -384,9 +373,50 @@ Cambia `"enabled"` a `true` o `false` y reinicia el gateway.
 | `x-ip` | jwt-headers | IP del cliente |
 | `Authorization` | session-resolver | `Bearer` derivado de la cookie de sesion, cuando no venia uno |
 
-Los de `jwt-headers` y los `x-geo-*` se **borran** al entrar la peticion y solo se
-reescriben desde una fuente validada — el cliente no puede fijarlos. Ver
+Los de `jwt-headers` se **borran** al entrar la peticion y solo se reescriben desde
+una fuente validada — el cliente no puede fijarlos. Ver
 [Seguridad en el edge](#seguridad-en-el-edge).
+
+### Por que se elimino ip-resolver
+
+El gateway tuvo un sexto plugin, `ip-resolver`, que resolvia la IP del cliente contra
+`ip-api.com` e inyectaba `x-geo-country|city|latitude|longitude|ip`. Se elimino el
+2026-10-04 por dos razones medidas, no teoricas.
+
+**No entregaba nada, por dos motivos independientes.** `api_base_url` apuntaba a
+`https://ip-api.com` y el tier gratuito de ip-api.com no sirve HTTPS — eso es de pago,
+asi que cada llamada moria con `remote error: tls: handshake failure`. Y aunque hubiera
+funcionado, ninguna `x-geo-*` figura en el `input_headers` de ninguno de los 31
+endpoints, y esa lista es blanca estricta: KrakenD las habria filtrado antes del
+backend.
+
+**Costaba caro.** Solo cacheaba las resoluciones con exito, asi que los fallos se
+repetian en cada peticion. Medido en local, con `X-Forwarded-For` publica:
+
+| | Con el plugin | Sin el |
+|---|---|---|
+| Latencia en serie | ~265 ms | ~15 ms |
+| p95 con 30 concurrentes | 2.07 s | 0.18 s |
+| Caudal | 28 req/s | 176 req/s |
+
+No se notaba en desarrollo porque la IP que ve el gateway es la bridge de Docker
+(privada) y el plugin descartaba las no enrutables; detras de un balanceador que
+propague la IP real lo pagaba cada peticion.
+
+**Lo que se fue con el, y por que no abre nada.** El plugin borraba las `x-geo-*`
+entrantes para que el cliente no pudiera falsificarlas. Ese borrado ya no existe, y no
+hace falta: `input_headers` no incluye ninguna `x-geo-*` en ningun endpoint, asi que una
+cabecera `x-geo-country` puesta por el cliente no llega a ningun backend. Tampoco
+confiaba en `X-Forwarded-For` de forma segura: lo leia sin lista de proxies de
+confianza, de modo que un cliente podia elegir la IP que generaba su propia
+geolocalizacion.
+
+**Si el geo vuelve a hacer falta**, lo que hay que resolver antes: un origen de datos
+que sirva — tier de pago o una base GeoIP local tipo MaxMind, que ademas evita mandar
+la IP del usuario final a un tercero —, cachear los fallos, una lista de proxies de
+confianza antes de creerse `X-Forwarded-For`, y anadir las `x-geo-*` a los
+`input_headers` de los endpoints que las consuman. El codigo esta en la historia de git
+hasta el commit que lo elimina.
 
 ## Trazabilidad (W3C Trace Context)
 
@@ -625,8 +655,10 @@ publicas:
 | `x-org-slug` | `slug` |
 | `x-ip` | resuelto por el plugin, no enviado por el cliente |
 
-`ip-resolver` hace lo mismo con los suyos: borra `x-geo-country|city|latitude|longitude|ip`
-antes de escribirlos.
+Las `x-geo-*` que inyectaba el extinto `ip-resolver` ya no existen — ver
+[Por que se elimino ip-resolver](#por-que-se-elimino-ip-resolver). Lo que impide que un
+cliente cuele cabeceras que el gateway no genera es `input_headers`, que es lista blanca
+estricta por endpoint.
 
 **Cabeceras de seguridad en las respuestas.** Modulo `security/http` activo — ver
 [Cabeceras de seguridad](#cabeceras-de-seguridad-configsettingssecurity_headersjson).
@@ -675,7 +707,7 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
 
 La configuracion usa [KrakenD Flexible Configuration](https://www.krakend.io/docs/configuration/flexible-config/). Cada fichero `.json` en `settings/` se convierte en un namespace de variables en el template.
 
-Ficheros disponibles: `service.json`, `hosts.json`, `endpoints.json` (generado), `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `ip_resolver.json`, `trace_context.json`, `accept_language.json`, `gateway_timeout.json`, `security_headers.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
+Ficheros disponibles: `service.json`, `hosts.json`, `endpoints.json` (generado), `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `trace_context.json`, `accept_language.json`, `gateway_timeout.json`, `security_headers.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
 
 ### Servicios backend
 
@@ -721,7 +753,7 @@ make generate >/dev/null && jq -c '.extra_config."plugin/http-server"."krakend-j
 
 ## Rutas publicas (`/public/*`)
 
-Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `/public/*` en `skip_paths` (jwt.json + ip_resolver.json) hace que cualquier ruta con ese prefijo evite validacion JWT y geo-lookup.
+Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `/public/*` en `skip_paths` (`jwt.json`) hace que cualquier ruta con ese prefijo evite la validacion JWT.
 
 ### Estrategia
 
@@ -747,7 +779,7 @@ en `endpoints.yaml`, no por prefijo.
 
 ### Wildcard skip_paths (interno)
 
-Plugins `jwt-headers` y `ip-resolver` interpretan entradas con sufijo `/*` como prefix-match:
+El plugin `jwt-headers` interpreta entradas con sufijo `/*` como prefix-match:
 
 - `"/public/*"` → match todas las rutas `/public/...`
 - `"/auth/callback"` → match exacto (sin sufijo)

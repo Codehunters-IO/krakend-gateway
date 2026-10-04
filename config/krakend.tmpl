@@ -1,7 +1,6 @@
 {{- $gtEnabled := eq (env "GATEWAY_TIMEOUT_ENABLED" | default (printf "%v" .gateway_timeout.enabled)) "true" -}}
 {{- $alEnabled := eq (env "ACCEPT_LANGUAGE_ENABLED" | default (printf "%v" .accept_language.enabled)) "true" -}}
 {{- $tcEnabled := eq (env "TRACE_CONTEXT_ENABLED" | default (printf "%v" .trace_context.enabled)) "true" -}}
-{{- $irEnabled := eq (env "IP_RESOLVER_ENABLED" | default (printf "%v" .ip_resolver.enabled)) "true" -}}
 {{- $jwtEnabled := eq (env "JWT_ENABLED" | default (printf "%v" .jwt.enabled)) "true" -}}
 {{- $sessEnabled := eq (env "SESSION_ENABLED" | default (printf "%v" .session.enabled)) "true" -}}
 {{- $shEnabled := eq (env "SECURITY_HEADERS_ENABLED" | default (printf "%v" .security_headers.enabled)) "true" -}}
@@ -53,19 +52,16 @@
            "plugin loaded". This array is declared in the REVERSE of the
            intended request-time chain (jwt-headers first, gateway-timeout
            last) so the actual execution order matches: gateway-timeout ->
-           accept-language -> trace-context -> ip-resolver ->
+           accept-language -> trace-context ->
            session-resolver -> jwt-headers. If you touch this array, keep it
            reversed and re-run the seeded-session check in
            docs/session-flow.md afterward. */}}
       "name": [
         {{- if $jwtEnabled }}
-        "krakend-jwt-headers"{{ if or $sessEnabled $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
+        "krakend-jwt-headers"{{ if or $sessEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
         {{- if $sessEnabled }}
-        "krakend-session-resolver"{{ if or $irEnabled $tcEnabled $alEnabled $gtEnabled }},{{ end }}
-        {{- end }}
-        {{- if $irEnabled }}
-        "krakend-ip-resolver"{{ if or $tcEnabled $alEnabled $gtEnabled }},{{ end }}
+        "krakend-session-resolver"{{ if or $tcEnabled $alEnabled $gtEnabled }},{{ end }}
         {{- end }}
         {{- if $tcEnabled }}
         "krakend-trace-context"{{ if or $alEnabled $gtEnabled }},{{ end }}
@@ -77,24 +73,17 @@
         "krakend-gateway-timeout"
         {{- end }}
       ]
-      {{- if or $gtEnabled $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
+      {{- if or $gtEnabled $alEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- if $gtEnabled }}
       "krakend-gateway-timeout": {
         "trigger_status": {{ .gateway_timeout.trigger_status }},
         "timeout_status": {{ .gateway_timeout.timeout_status }},
         "min_elapsed": "{{ env "GATEWAY_TIMEOUT_MIN_ELAPSED" | default .gateway_timeout.min_elapsed }}"
-      }{{ if or $alEnabled $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
+      }{{ if or $alEnabled $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $alEnabled }}
       "krakend-accept-language": {
         "default_value": "{{ .accept_language.default_value }}"
-      }{{ if or $irEnabled $sessEnabled $jwtEnabled }},{{ end }}
-      {{- end }}
-      {{- if $irEnabled }}
-      "krakend-ip-resolver": {
-        "api_base_url": "{{ .ip_resolver.api_base_url }}",
-        "cache_ttl_minutes": {{ .ip_resolver.cache_ttl_minutes }},
-        "skip_paths": {{ marshal .ip_resolver.skip_paths }}
       }{{ if or $sessEnabled $jwtEnabled }},{{ end }}
       {{- end }}
       {{- if $sessEnabled }}

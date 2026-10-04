@@ -16,15 +16,14 @@ reads. This document covers the gateway side only. Design rationale and the
 ## Plugin chain order
 
 ```
-gateway-timeout → accept-language → trace-context → ip-resolver → session-resolver → jwt-headers
+gateway-timeout → accept-language → trace-context → session-resolver → jwt-headers
 ```
 
 This is the order requests are actually processed in, left to right.
-`session-resolver` runs immediately before `jwt-headers` and after
-`ip-resolver`, so that:
+`session-resolver` runs immediately before `jwt-headers`, so that:
 
-- by the time `session-resolver` runs, IP resolution and tracing have already
-  attached whatever context they add to the request;
+- by the time `session-resolver` runs, tracing has already attached whatever
+  context it adds to the request;
 - `session-resolver`'s only effect — setting `Authorization` from a resolved
   session, or leaving a caller-supplied bearer untouched — happens **before**
   `jwt-headers` validates it. `jwt-headers` is otherwise unchanged: it always
@@ -79,17 +78,20 @@ re-run the seeded-session check after any change.
 
 Reversing the array to fix `session-resolver` vs. `jwt-headers` does not
 just affect those two — it reverses the request-time order of *all six*
-plugins relative to how they had been running before this plan. Before this
-fix, the declared array (`gateway-timeout, accept-language, trace-context,
-ip-resolver, session-resolver, jwt-headers`) executed in exactly that order
+plugins relative to how they had been running before this plan. (The chain
+had six plugins then; `ip-resolver` was removed on 2026-10-04 — see the
+README section on why. The ordering rule and the evidence below are
+unaffected.) Before this fix, the declared array (`gateway-timeout,
+accept-language, trace-context, ip-resolver, session-resolver, jwt-headers`)
+executed in exactly that order
 reversed at request time too, by the same wrap rule: `jwt-headers` ran
 *first* (outermost) and `gateway-timeout` ran *last* (innermost, right next
 to the router). After the fix, execution order matches the diagram at the
 top of this document: `gateway-timeout` now runs first (outermost, wrapping
 the entire request/response cycle including the backend call — which is
 what lets it convert a `5xx` after the fact into a `504` on elapsed time),
-then `accept-language`, `trace-context`, `ip-resolver`, `session-resolver`,
-and finally `jwt-headers` closest to the backend.
+then `accept-language`, `trace-context`, `ip-resolver` (since removed),
+`session-resolver`, and finally `jwt-headers` closest to the backend.
 
 This is a genuine behavior change for traffic that has nothing to do with
 sessions, and it ships in the production `Dockerfile`'s pre-baked config too
@@ -113,10 +115,12 @@ five bystanders benefits from or is neutral to the new order:
   rejection with its trace means matching method, path and timestamp
   across two lines — there is no shared request id in the log fields.
   Threading `traceId` into the deny logs is the fix; it has not been done.
-- **`ip-resolver`** still runs, and now runs earlier, before both auth
-  plugins that consume its output (`jwt-headers`' `x-ip` header and any
-  future consumer). Its anti-spoof header strip stays ahead of every
-  consumer either way, so this is neutral-to-beneficial, not a risk.
+- **`ip-resolver`** ran earlier after this change, and was removed
+  altogether on 2026-10-04. Two claims made here at the time were wrong and
+  are left visible rather than quietly edited: nothing consumed its output —
+  `jwt-headers` derives `x-ip` from its own `extractClientIP`, not from this
+  plugin — and no `x-geo-*` header ever reached a backend, because
+  `input_headers` is a strict per-endpoint allowlist that never listed them.
 - **`jwt-headers`** moves from first-executed to last-executed. Its own
   behavior per-request (JWKS validation, claims-to-headers mapping) is
   unchanged; only its position relative to the others moved, to the
