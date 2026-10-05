@@ -4,10 +4,6 @@ COPY plugins/jwt-headers/ /app/plugins/jwt-headers/
 WORKDIR /app/plugins/jwt-headers
 RUN go build -buildmode=plugin -o /app/jwt-headers.so .
 
-COPY plugins/ip-resolver/ /app/plugins/ip-resolver/
-WORKDIR /app/plugins/ip-resolver
-RUN go build -buildmode=plugin -o /app/ip-resolver.so .
-
 COPY plugins/trace-context/ /app/plugins/trace-context/
 WORKDIR /app/plugins/trace-context
 RUN go build -buildmode=plugin -o /app/trace-context.so .
@@ -27,7 +23,6 @@ RUN go build -buildmode=plugin -o /app/session-resolver.so .
 FROM krakend:2.13.4
 
 COPY --from=plugin-builder /app/jwt-headers.so /opt/krakend/plugins/jwt-headers.so
-COPY --from=plugin-builder /app/ip-resolver.so /opt/krakend/plugins/ip-resolver.so
 COPY --from=plugin-builder /app/trace-context.so /opt/krakend/plugins/trace-context.so
 COPY --from=plugin-builder /app/gateway-timeout.so /opt/krakend/plugins/gateway-timeout.so
 COPY --from=plugin-builder /app/accept-language.so /opt/krakend/plugins/accept-language.so
