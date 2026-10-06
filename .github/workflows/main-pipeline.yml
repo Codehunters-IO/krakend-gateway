@@ -21,8 +21,12 @@ jobs:
       run_commit_lint: false
       run_build: true
       run_test: true
-      run_artifact: true
-      run_deploy: true
+      # No deploy environment exists yet: no `cert` environment, no AWS/EC2/WireGuard
+      # secrets. With these on, the artifact and deploy jobs require secrets that
+      # are not there and GitHub aborts the whole run before a single job starts.
+      # Build and test still gate main. Turn both back on once `cert` is configured.
+      run_artifact: false
+      run_deploy: false
       run_cleanup: false
       run_release: false
       deploy_target: 'ec2-vpn'
