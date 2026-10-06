@@ -43,7 +43,7 @@ jobs:
   deploy:
     name: Deploy to prod
     needs: validate
-    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v1
+    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2
     with:
       run_commit_lint: false
       run_build: true

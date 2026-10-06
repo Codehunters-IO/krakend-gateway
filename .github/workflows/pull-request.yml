@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   validate:
-    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v1
+    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2
     with:
       run_commit_lint: true
       run_build: true
