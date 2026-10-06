@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-02
+accepted-date: 2026-10-06
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos]
@@ -129,6 +130,46 @@ Decisiones acompañantes que forman parte de este outcome:
   de realm equivocado → 401; `/api/ping` sin token → 200.
 - **`krakend check -d -t -c krakend.json`**: valida render del template + schema con `realms[]`.
 - **Métrica runtime**: contador de rechazos JWT etiquetado por realm/prefijo (deriva = alerta).
+
+**Estado de la confirmación al aceptar (2026-10-06).** Se acepta con el **paso 1 del rollout en
+producción** y los pasos 2 y 3 sin empezar. De los cuatro puntos de confirmación, uno está
+cubierto en parte y tres no lo están. Se deja escrito en vez de aceptar en silencio.
+
+Lo que **sí** está implementado:
+
+- **Paso 1 completo.** El gateway sirve en `:8090` con el realm `forgeos`
+  (`config/settings/jwt.json`), 23 de los 31 endpoints son `/api/*`, y el backend se resuelve por
+  `FORGEOS_HOST`. No hizo falta tocar Go, como preveía el ADR.
+- `jwt-headers` valida firma contra JWKS, comprueba `iss`, exige `required_claims`
+  (`sub`, `organizationId`) y mapea cinco claims a cabeceras, entre ellas `X-Organization-Id`.
+- El edge falla cerrado: devuelve `503` en toda ruta protegida mientras el JWKS no esté cargado
+  (`plugins/jwt-headers/main.go:226`).
+
+Lo que **no**:
+
+- **Pasos 2 y 3 sin empezar.** No existe `realms[]` en el plugin —cero ocurrencias— y el `issuer`
+  sigue apuntando a `:8083`, la instancia de Keycloak específica de ForgeOS. Las dos instancias
+  siguen en pie. El diseño del paso 2 existe y está enmendado (ver «Enmienda» arriba), pero no
+  hay código.
+- **El test de routing no cubre lo que este punto dice.** `plugins/jwt-headers/matchers_test.go`
+  tiene exactamente dos tests, `TestBuildMatchers_SegmentWildcard` y
+  `TestBuildMatchers_ExactFastPath`, los dos del matcher de rutas. Ninguno valida un token, ni la
+  inyección de `X-Organization-Id`, ni el `401` sin token. La ruta de validación JWT no tiene
+  test hoy. Y el caso «el mismo token contra el prefijo de otro producto» quedó sin sentido con
+  la enmienda: ya no hay selección por prefijo.
+- **El smoke en CI no existe.** Igual que en ADR-0001: el pipeline valida el render y el esquema,
+  no lo que sale por el socket.
+- **La métrica de rechazos por realm no existe.** No hay instrumentación de ese tipo en el
+  plugin.
+- `krakend check` **sí** corre en CI en cada pull request vía `make check`, pero valida el
+  esquema actual; la parte «con `realms[]`» no aplica mientras el paso 2 no exista.
+
+**Por qué se acepta así.** La decisión de fondo —realm por producto, un IdP, un edge, Keycloak en
+su host— está tomada, es la que gobierna el diseño del paso 2 y lleva dos meses dirigiendo
+trabajo real. Mantenerla en `proposed` describía mal el estado: el paso 1 está sirviendo tráfico.
+Lo que queda pendiente es ejecución de los pasos 2 y 3, no la decisión, y los puntos de
+confirmación no cubiertos pertenecen en su mayoría a esos pasos. Al implementar el paso 2 deben
+cerrarse los cuatro, con un ADR nuevo si la decisión cambia —este queda inmutable.
 
 ## Pros and Cons of the Options
 
