@@ -13,3 +13,4 @@ para cambiar una decisión, escribir uno nuevo con `supersedes: NNNN`.
 |-----|--------|--------|-------|
 | [0001](0001-security-headers-edge.md) | Cabeceras de seguridad en el edge vía `security/http` | accepted | 2026-06-26 |
 | [0002](0002-platform-edge-global-keycloak-realm-per-product.md) | Edge de plataforma compartido + Keycloak global con realm-por-producto | proposed | 2026-08-02 |
+| [0003](0003-session-state-at-the-edge.md) | Estado de sesión en el edge — cookie opaca resuelta contra Valkey | proposed | 2026-10-05 |
