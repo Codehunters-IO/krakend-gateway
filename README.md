@@ -161,6 +161,8 @@ make build
 | `make build` | Construye imagen Docker de produccion |
 | `make plugin-build` | Compila todos los plugins con Docker |
 | `make plugin-check` | Verifica que plugins + config son validos |
+| `make plugins-test` | `go test` + `go vet` en los cinco modulos de plugins |
+| `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
