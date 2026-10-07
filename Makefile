@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -86,6 +86,23 @@ plugin-check: ## Verify plugins load correctly
 		-v "$(CURDIR)/$(CONFIG_DIR):/etc/krakend" \
 		-e FC_ENABLE=1 -e FC_SETTINGS=/etc/krakend/settings \
 		$(KRAKEND_IMAGE) check -d -t -c "/etc/krakend/krakend.tmpl"
+
+plugins-test: ## Run go test + go vet across every plugin module
+	@fail=0; \
+	for plugin in $(PLUGINS); do \
+		printf '%-18s ' "$$plugin"; \
+		if (cd plugins/$$plugin && go test ./... >/tmp/pt.$$plugin.log 2>&1 && go vet ./... >>/tmp/pt.$$plugin.log 2>&1); then \
+			echo "ok"; \
+		else \
+			echo "FAIL"; cat /tmp/pt.$$plugin.log; fail=1; \
+		fi; \
+		rm -f /tmp/pt.$$plugin.log; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "plugins-test: FAILED" >&2; exit 1; fi; \
+	echo "plugins-test: OK ($(words $(PLUGINS)) modules)"
+
+plugins-abi: ## Fail if the plugin builder's Go version drifts from the KrakenD image
+	./scripts/check-plugin-abi.sh $(KRAKEND_IMAGE)
 
 dev: plugin-build up ## Build plugins and start locally (full local dev)
 
