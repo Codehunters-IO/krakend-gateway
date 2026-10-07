@@ -43,7 +43,10 @@ jobs:
   deploy:
     name: Deploy to prod
     needs: validate
-    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2
+    # Pinned, not floating: this is the production release, launched by hand. What it
+    # ships must be the same thing tomorrow as today. Bump deliberately; v2.2.1 is
+    # 1da8c1e.
+    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2.2.1
     with:
       run_commit_lint: false
       run_build: true
