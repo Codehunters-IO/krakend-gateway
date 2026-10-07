@@ -370,7 +370,7 @@ Cambia `"enabled"` a `true` o `false` y reinicia el gateway.
 | `x-username` | jwt-headers | Username del token JWT (`preferred_username`) |
 | `x-user-roles` | jwt-headers | Roles del usuario (`realm_access.roles`) |
 | `x-user-id` | jwt-headers | Subject (ID) del usuario (`sub`) |
-| `X-Organization-Id` | jwt-headers | Organizacion (`organizationId`, claim obligatorio) |
+| `X-Organization-Id` | jwt-headers | Organizacion (`organizationId`). **No obligatorio**: ver [ADR-0005](docs/adr/0005-one-platform-realm-and-master-as-operator-realm.md) |
 | `x-org-slug` | jwt-headers | Slug de la organizacion (`slug`) |
 | `x-ip` | jwt-headers | IP del cliente |
 | `Authorization` | session-resolver | `Bearer` derivado de la cookie de sesion, cuando no venia uno |

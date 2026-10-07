@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-06
+accepted-date: 2026-10-07
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma]
 informed: [equipo forgeos]
@@ -91,8 +92,17 @@ solo verifica el orden cuando la sesión está habilitada**. Un `make check` cor
 apagada no dice nada sobre esta decisión, aunque su salida parezca conforme.
 
 A diferencia de ADR-0001, cuyo smoke test nunca se escribió, y de ADR-0003, que no puede pasar a
-`accepted` hasta que exista el job de tests de plugins, esta confirmación **ya existe y ya pasa
-en verde**.
+`accepted` hasta tener los valores definitivos de los tres relojes, esta confirmación **ya existe
+y ya pasa en verde**.
+
+**Estado de la confirmación al aceptar (2026-10-07).** Los tres puntos están cubiertos y
+ejercitados, no solo escritos. `make check` corre `scripts/check-plugin-chain-order.sh` en cada
+pull request y responde
+`OK (krakend-jwt-headers declared first / executes last, krakend-session-resolver immediately
+before it)`. El punto ciego descrito arriba sigue siendo real y es la única reserva: con
+`SESSION_ENABLED=false` el guardia termina con éxito sin comprobar nada. No se corrige al aceptar
+porque la restricción de adyacencia es genuinamente irrelevante en esa configuración; queda
+documentado para que una salida conforme no se confunda con una verificación.
 
 ## More Information
 
