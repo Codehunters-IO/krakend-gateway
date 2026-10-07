@@ -16,7 +16,11 @@ permissions:
 jobs:
   pipeline:
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
-    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2
+    # Pinned, not floating: @v2 moves. On 2026-10-06 two consecutive pushes to main
+    # failed and the next one passed with a functionally identical caller — only the
+    # tag's target had changed in between. What deploys must not depend on when it
+    # runs. Bump deliberately; v2.2.1 is 1da8c1e.
+    uses: Codehunters-IO/ci-templates/.github/workflows/krakend-main-pipeline.yml@v2.2.1
     with:
       run_commit_lint: false
       run_build: true
