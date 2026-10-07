@@ -129,11 +129,23 @@ revocar antes de su expiración, así que el backchannel logout deja de tener ef
   Max*, o un techo más corto corta sesiones vivas y uno más largo deja de ser techo. Fijar esos
   valores es requisito para aceptar este ADR, igual que el job de CI.
 
-**Interacción con ADR-0002, sin resolver.** ADR-0002 elige realm por producto y el spec
-multi-realm liga el realm a la ruta. La sesión, en cambio, es una sola cookie. Un usuario con
-sesión de un realm pegando a la ruta de otro producto debería recibir `401` por la comprobación
-de `iss`, pero eso es una consecuencia emergente de dos diseños independientes, no una decisión
-tomada. Debe cerrarse al implementar la validación multi-realm.
+**Interacción con los realms, resuelta por ADR-0005.** Este ADR se escribió cuando ADR-0002 elegía
+realm por producto, y dejaba abierto qué ocurre con una sola cookie de sesión frente a varios
+realms: un usuario con sesión de un realm pegando a la ruta de otro producto debía recibir `401`
+por la comprobación de `iss`, pero eso era una consecuencia emergente de dos diseños
+independientes, no una decisión tomada.
+
+[ADR-0005](0005-one-platform-realm-and-master-as-operator-realm.md) cierra la pregunta por
+construcción: `codehunters` es el único realm de aplicaciones y cada aplicación es un cliente
+dentro de él, de modo que una cookie de sesión y un issuer se corresponden uno a uno. No hay
+sesión cruzada entre realms de producto porque no hay varios realms de producto.
+
+Queda una variante más estrecha, y conviene no perderla de vista: ADR-0005 hace de `master` el
+realm de operadores. Mientras los operadores lleguen a la Admin API a través de `auth-bff` con su
+propio token y no por una ruta protegida de este gateway, el edge sigue viendo un solo issuer y
+este diseño no cambia. **Si algún día el gateway tiene que aceptar además tokens de `master`, la
+pregunta vuelve**: una cookie de sesión tendría que decir a qué realm pertenece, y el contrato
+`v1:session:{sid}` no lleva ese campo hoy. Añadirlo es barato; descubrirlo tarde, no.
 
 ## Confirmation
 
@@ -210,5 +222,9 @@ reconocida, no bloqueo.
   contrato `v1:session:{sid}`; CSRF; rotación): el spec enlazado arriba.
 - Flujo en ejecución, orden de la cadena de plugins y runbook:
   [`docs/session-flow.md`](../session-flow.md).
-- Related: ADR-0002 (edge de plataforma y realm por producto) — ver la interacción sin resolver
-  en *Consequences*.
+- Related: [ADR-0005](0005-one-platform-realm-and-master-as-operator-realm.md) (un realm de
+  aplicaciones, `master` para operadores), que sustituye a ADR-0002 y resuelve la pregunta de la
+  sesión frente a varios realms — ver *Consequences*.
+- Related: [ADR-0002](0002-platform-edge-global-keycloak-realm-per-product.md), superseded. Su
+  mitad «edge de plataforma compartido» sigue vigente y es la que sostiene este diseño; la mitad
+  «realm por producto» no.
