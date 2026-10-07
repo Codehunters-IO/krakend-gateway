@@ -1,13 +1,22 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0005
 date: 2026-08-02
 accepted-date: 2026-10-06
+superseded-date: 2026-10-07
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos]
 ---
 
 # ADR-0002: Edge de plataforma compartido + Keycloak global con realm-por-producto
+
+> **Sustituido por [ADR-0005](0005-one-platform-realm-and-master-as-operator-realm.md) (2026-10-07).**
+> La mitad «realm-por-producto» de esta decisión queda sin efecto: las aplicaciones comparten el
+> realm `codehunters` y `master` es el realm de operadores. Realms separados por producto impiden
+> «un login, varias aplicaciones», que es el requisito que sostiene `react-shell-launcher`, y cuyo
+> ADR-0001 ya había decidido lo contrario desde el 2026-09-03 sin que nadie cruzara ambos textos.
+> La mitad «edge de plataforma compartido» sigue vigente.
 
 ## Enmienda (2026-09-29)
 
