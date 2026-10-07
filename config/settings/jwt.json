@@ -15,7 +15,7 @@
   ],
   "add_ip_header": true,
   "ip_header_name": "x-ip",
-  "required_claims": ["sub", "organizationId"],
+  "required_claims": ["sub"],
   "roles_claim": "realm_access.roles",
   "required_roles": [],
   "introspection_enabled": false,
