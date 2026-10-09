@@ -146,6 +146,10 @@
           {{- end }}
         {{- end }}
         "required_roles": {{ marshal $roleRules }},
+        {{/* Only an explicit "false" observes. Anything unrecognised -- 1, yes,
+             TRUE, empty -- enforces, because the failure mode of guessing wrong
+             here is an open edge. */}}
+        "roles_enforce": {{ if eq (env "JWT_ROLES_ENFORCE" | default "true") "false" }}false{{ else }}true{{ end }},
         "add_ip_header": {{ .jwt.add_ip_header }},
         "ip_header_name": "{{ .jwt.ip_header_name }}",
         "introspection_enabled": {{ .jwt.introspection_enabled }},

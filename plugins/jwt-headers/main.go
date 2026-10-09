@@ -42,8 +42,13 @@ type claimMapping struct {
 
 // roleRule requires the caller to hold at least one of Roles to reach a path.
 // Path segments support a single-segment wildcard: "/raffles/*/tickets/reserve".
+// roleRule gates a path glob on a claim. Claim is a dot-notation path and
+// empty inherits cfg.RolesClaim; it exists so a rule can read client roles
+// (resource_access.<client>.roles) rather than realm roles, which are global
+// by construction and say nothing about which application the holder may enter.
 type roleRule struct {
 	Path  string   `json:"path"`
+	Claim string   `json:"claim"`
 	Roles []string `json:"roles"`
 }
 
@@ -56,8 +61,13 @@ type pluginConfig struct {
 	RequiredClaims  []string       `json:"required_claims"`
 	RolesClaim      string         `json:"roles_claim"`
 	RequiredRoles   []roleRule     `json:"required_roles"`
-	AddIPHeader     bool           `json:"add_ip_header"`
-	IPHeaderName    string         `json:"ip_header_name"`
+	// RolesEnforce nil or true enforces. Only an explicit false observes:
+	// the gate logs what it would have denied and admits the request, which is
+	// how a deployment discovers missing role assignments from live traffic
+	// instead of from an inventory someone assembled by hand.
+	RolesEnforce *bool  `json:"roles_enforce"`
+	AddIPHeader  bool   `json:"add_ip_header"`
+	IPHeaderName string `json:"ip_header_name"`
 	// Introspection (RFC 7662): when enabled, each validated token is checked
 	// against Keycloak's introspection endpoint so revoked/logged-out sessions
 	// are rejected immediately, not just at token expiry.
@@ -291,10 +301,17 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 		}
 
 		// Enforce per-endpoint role requirements (RBAC at the edge).
-		if !hasRequiredRole(cfg, claims, req.URL.Path) {
-			logger.Warn("forbidden: missing required role", "path", req.URL.Path)
-			deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
-			return
+		if d := evaluateRoles(cfg, claims, req.URL.Path); d.matched && !d.allowed {
+			if cfg.RolesEnforce != nil && !*cfg.RolesEnforce {
+				logger.Warn("role check would deny",
+					"path", req.URL.Path, "claim", d.claim,
+					"required", d.required, "held", d.held, "enforced", false)
+			} else {
+				logger.Warn("forbidden: missing required role",
+					"path", req.URL.Path, "claim", d.claim)
+				deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
+				return
+			}
 		}
 
 		// Extract claims and set headers
@@ -380,29 +397,44 @@ func matchesAny(path string, regexes []*regexp.Regexp) bool {
 	return false
 }
 
-// hasRequiredRole returns true if the path has no role rule, or the caller holds
-// at least one required role. Roles are read from cfg.RolesClaim (dot notation).
-func hasRequiredRole(cfg *pluginConfig, claims jwt.MapClaims, path string) bool {
-	var required []string
-	matched := false
-	for _, rule := range cfg.RequiredRoles {
-		if matchGlob(rule.Path, path) {
-			matched = true
-			required = append(required, rule.Roles...)
+// roleDecision is what the gate concluded, kept separate from acting on it so
+// observation mode can log a denial it is not going to apply.
+type roleDecision struct {
+	matched  bool
+	allowed  bool
+	claim    string
+	required []string
+	held     []string
+}
+
+// evaluateRoles returns allowed=true when no rule matches the path -- the
+// permissive default is deliberate, and completeness is enforced by
+// scripts/check-endpoint-authorization.sh at build time rather than by a
+// runtime deny that would turn an incomplete rule list into an outage.
+func evaluateRoles(cfg *pluginConfig, claims jwt.MapClaims, path string) roleDecision {
+	var worst roleDecision
+	for _, r := range cfg.RequiredRoles {
+		if !matchGlob(r.Path, path) {
+			continue
 		}
-	}
-	if !matched {
-		return true
-	}
-	userRoles := extractStringSlice(claims, cfg.RolesClaim)
-	for _, ur := range userRoles {
-		for _, rr := range required {
-			if ur == rr {
-				return true
+		claim := r.Claim
+		if claim == "" {
+			claim = cfg.RolesClaim
+		}
+		held := extractStringSlice(claims, claim)
+		for _, h := range held {
+			for _, want := range r.Roles {
+				if h == want {
+					return roleDecision{matched: true, allowed: true, claim: claim, required: r.Roles, held: held}
+				}
 			}
 		}
+		worst = roleDecision{matched: true, allowed: false, claim: claim, required: r.Roles, held: held}
 	}
-	return false
+	if !worst.matched {
+		return roleDecision{allowed: true}
+	}
+	return worst
 }
 
 // matchGlob matches segment by segment; "*" matches exactly one path segment.
