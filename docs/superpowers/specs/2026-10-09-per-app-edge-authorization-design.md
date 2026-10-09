@@ -277,10 +277,13 @@ own.
   `GET` and `POST` is correct for a coarse gate and wrong for anyone who reads
   it expecting method-level control. The ADR states it as a non-goal; the YAML
   will carry a comment at the first endpoint where it bites.
-- **25 endpoints need a decision each.** The CI guard makes that a one-time
-  cost paid in a reviewable diff, which is the intent, but it is not a small
-  diff and it needs product knowledge the gateway does not have: which client
-  owns which route group.
+- **25 endpoints need a rule each, but not 25 decisions.** Because the gate is
+  coarse by design, the decision is one role set per application surface — two
+  of them, `forgeos` (17 endpoints) and `knowledge` (8) — applied across 25
+  rows. The diff is long and mechanical. What it needs from outside this
+  repository is small and specific: the client id that owns each surface, and
+  the role names that exist on it. Anyone wanting finer rules later is asking
+  for the method-level matching this design declares a non-goal.
 
 ## Open items
 
@@ -289,8 +292,10 @@ own.
   declares. The examples here are placeholders in that one respect and must be
   replaced with measured values before implementation, the same way ADR-0003's
   clocks are waiting on the realm.
-- Whether `platform`'s five endpoints (the `/auth/*` flow) need any rule at
-  all: four are public, and the one protected route may be a waiver case.
+- ~~Whether `platform`'s five endpoints need a rule.~~ Resolved by measurement
+  on 2026-10-09: **all five are public** — the whole `/auth/*` flow — so no
+  waiver case arises there. The 25 protected endpoints are `forgeos` (17) and
+  `knowledge` (8).
 
 ## Deferred: one gateway per realm
 
