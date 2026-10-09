@@ -13,6 +13,6 @@ para cambiar una decisión, escribir uno nuevo con `supersedes: NNNN`.
 |-----|--------|--------|-------|
 | [0001](0001-security-headers-edge.md) | Cabeceras de seguridad en el edge vía `security/http` | accepted | 2026-06-26 |
 | [0002](0002-platform-edge-global-keycloak-realm-per-product.md) | Edge de plataforma compartido + Keycloak global con realm-por-producto | superseded por 0005 | 2026-08-02 |
-| [0003](0003-session-state-at-the-edge.md) | Estado de sesión en el edge — cookie opaca resuelta contra Valkey | proposed | 2026-10-05 |
+| [0003](0003-session-state-at-the-edge.md) | Estado de sesión en el edge — cookie opaca resuelta contra Valkey | accepted | 2026-10-05 |
 | [0004](0004-plugin-chain-order.md) | Array `plugin/http-server` invertido, y los dos plugins de auth juntos | accepted | 2026-10-06 |
 | [0005](0005-one-platform-realm-and-master-as-operator-realm.md) | Un realm de aplicaciones (`codehunters`) y `master` como realm de operadores | proposed | 2026-10-07 |
