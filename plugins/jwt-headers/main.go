@@ -40,12 +40,18 @@ type claimMapping struct {
 	Header string `json:"header"`
 }
 
-// roleRule requires the caller to hold at least one of Roles to reach a path.
-// Path segments support a single-segment wildcard: "/raffles/*/tickets/reserve".
 // roleRule gates a path glob on a claim. Claim is a dot-notation path and
 // empty inherits cfg.RolesClaim; it exists so a rule can read client roles
 // (resource_access.<client>.roles) rather than realm roles, which are global
 // by construction and say nothing about which application the holder may enter.
+//
+// Path takes a wildcard that matches EXACTLY ONE segment, which is not what
+// "*" means in skip_paths: compilePattern turns a trailing /* into (/.*)?,
+// spanning any number of segments. Both lists are derived from the same
+// path-to-glob transformation in config/krakend.tmpl, so the same string means
+// different things on either side. A rule of "/api/*" therefore gates
+// /api/projects and NOT /api/projects/P-1/stories — it is not a blanket gate
+// for a surface, however much it reads like one.
 type roleRule struct {
 	Path  string   `json:"path"`
 	Claim string   `json:"claim"`
@@ -302,13 +308,20 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 
 		// Enforce per-endpoint role requirements (RBAC at the edge).
 		if d := evaluateRoles(cfg, claims, req.URL.Path); d.matched && !d.allowed {
-			if cfg.RolesEnforce != nil && !*cfg.RolesEnforce {
-				logger.Warn("role check would deny",
-					"path", req.URL.Path, "claim", d.claim,
-					"required", d.required, "held", d.held, "enforced", false)
-			} else {
-				logger.Warn("forbidden: missing required role",
-					"path", req.URL.Path, "claim", d.claim)
+			observing := cfg.RolesEnforce != nil && !*cfg.RolesEnforce
+			// Both branches log the same fields. An enforced 403 that says only
+			// "missing required role" cannot be diagnosed from logs: which of
+			// several matching rules denied, and what the token actually held,
+			// are the two things the operator needs.
+			for _, f := range d.failed {
+				msg := "forbidden: missing required role"
+				if observing {
+					msg = "role check would deny"
+				}
+				logger.Warn(msg, "path", req.URL.Path, "claim", f.claim,
+					"required", f.required, "token_roles", f.tokenRoles, "enforced", !observing)
+			}
+			if !observing {
 				deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
 				return
 			}
@@ -397,14 +410,23 @@ func matchesAny(path string, regexes []*regexp.Regexp) bool {
 	return false
 }
 
+// failedRule is one matching rule the token did not satisfy. Every one of them
+// is reported: the rollout reads these lines to find missing role assignments,
+// and reporting an arbitrary one sends the operator to grant a role on a client
+// the route has nothing to do with — which does unblock the route, because the
+// union is any-of, and leaves the rule the route exists for unsatisfied.
+type failedRule struct {
+	claim      string
+	required   []string
+	tokenRoles []string
+}
+
 // roleDecision is what the gate concluded, kept separate from acting on it so
 // observation mode can log a denial it is not going to apply.
 type roleDecision struct {
-	matched  bool
-	allowed  bool
-	claim    string
-	required []string
-	held     []string
+	matched bool
+	allowed bool
+	failed  []failedRule
 }
 
 // evaluateRoles returns allowed=true when no rule matches the path -- the
@@ -412,29 +434,39 @@ type roleDecision struct {
 // scripts/check-endpoint-authorization.sh at build time rather than by a
 // runtime deny that would turn an incomplete rule list into an outage.
 func evaluateRoles(cfg *pluginConfig, claims jwt.MapClaims, path string) roleDecision {
-	var worst roleDecision
+	d := roleDecision{allowed: true}
 	for _, r := range cfg.RequiredRoles {
 		if !matchGlob(r.Path, path) {
 			continue
 		}
+		d.matched = true
 		claim := r.Claim
 		if claim == "" {
 			claim = cfg.RolesClaim
 		}
 		held := extractStringSlice(claims, claim)
-		for _, h := range held {
-			for _, want := range r.Roles {
-				if h == want {
-					return roleDecision{matched: true, allowed: true, claim: claim, required: r.Roles, held: held}
-				}
-			}
+		if holdsAny(held, r.Roles) {
+			return roleDecision{matched: true, allowed: true}
 		}
-		worst = roleDecision{matched: true, allowed: false, claim: claim, required: r.Roles, held: held}
+		d.failed = append(d.failed, failedRule{claim: claim, required: r.Roles, tokenRoles: held})
 	}
-	if !worst.matched {
+	if !d.matched {
 		return roleDecision{allowed: true}
 	}
-	return worst
+	d.allowed = false
+	return d
+}
+
+// holdsAny names the any-of semantics the gate applies within one rule.
+func holdsAny(held, want []string) bool {
+	for _, h := range held {
+		for _, w := range want {
+			if h == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matchGlob matches segment by segment; "*" matches exactly one path segment.

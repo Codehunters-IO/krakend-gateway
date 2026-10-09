@@ -108,9 +108,24 @@ New optional field on `Endpoint` in `cmd/gen/spec.go`:
     any_of: [user, admin]
 ```
 
-`claim` is optional and defaults to the global `roles_claim` from `jwt.json`.
 `any_of` is required when `roles` is present and must be non-empty — an empty
 list would read as "no roles needed" while looking like a rule.
+
+**`claim` is required on a protected endpoint. Amended 2026-10-09 during
+implementation**, after review: it was specified as optional, falling back to
+the global `roles_claim`, which is `realm_access.roles`. That fallback made a
+rule that gates nothing — a realm role is global by construction and in a
+default realm everyone holds the common ones — while the diff reads as
+"authorization added" and the ADR claims the surface is gated on client roles.
+Goal 1 was defeated by omission. The fallback survives only for `jwt.json`'s own
+literals, which the generator never sees.
+
+A second rule came out of the same review: a `claim` under `resource_access.`
+must have exactly three segments. Keycloak permits a dot in a `clientId`, and
+the plugin splits the claim path on dots with no escape, so
+`resource_access.my.app.roles` resolves to nothing and denies every request to
+that surface — a total product lockout with a configuration that the regex, the
+generator and the ADR all call correct.
 
 The generator emits the field into `endpoints.json`; `make gen-check` already
 fails when the generated file drifts from the spec, so that part needs no new

@@ -57,6 +57,24 @@ services:
       - TRACE_CONTEXT_ENABLED=${TRACE_CONTEXT_ENABLED:-}
       - JWT_ENABLED=${JWT_ENABLED:-}
       - SECURITY_HEADERS_ENABLED=${SECURITY_HEADERS_ENABLED:-}
+      # Overrides the template reads that nothing passed until now. The image
+      # renders config inside the container, and this block is an allowlist with
+      # no env_file behind it, so a variable missing here is a knob that accepts
+      # a value and changes nothing. An empty value falls through the template's
+      # `| default`, so every line below is behaviour-neutral when unset —
+      # verified by diffing the rendered config. scripts/check-template-env.sh
+      # fails the build if the two lists drift apart again.
+      - LOG_LEVEL=${LOG_LEVEL:-}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
+      - HSTS_SECONDS=${HSTS_SECONDS:-}
+      - SESSION_ALLOWED_ORIGINS=${SESSION_ALLOWED_ORIGINS:-}
+      - GATEWAY_TIMEOUT_MIN_ELAPSED=${GATEWAY_TIMEOUT_MIN_ELAPSED:-}
+      - JWT_INTROSPECTION_CLIENT_SECRET=${JWT_INTROSPECTION_CLIENT_SECRET:-}
+      # The per-app authorization rollout depends on this one: JWT_ROLES_ENFORCE
+      # =false makes jwt-headers log what it would deny instead of denying it.
+      # Unreachable from here, the observation step of that rollout silently
+      # enforces and takes both product surfaces down.
+      - JWT_ROLES_ENFORCE=${JWT_ROLES_ENFORCE:-}
     labels:
       observability.service: "forgeos-gw-krakend"
       observability.environment: "develop"

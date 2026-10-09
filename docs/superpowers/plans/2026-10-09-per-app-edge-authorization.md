@@ -169,6 +169,13 @@ Inside `Validate`'s endpoint loop, after the existing `auth` check:
 Run: `cd cmd/gen && go test ./... -v`
 Expected: PASS, including the pre-existing suite.
 
+- [ ] **Step 5b: Update the golden fixture**
+
+`cmd/gen/testdata/expected.json` is compared byte for byte by
+`TestGenerate_Golden`, so it carries every emitted key and the new one has to
+land there too: add `"roles": null` to each of its three endpoints, after
+`rate_limit`.
+
 - [ ] **Step 6: Verify the generated file is unchanged for today's spec**
 
 No endpoint declares `roles` yet, so the new key must render as `null` on every
@@ -804,6 +811,21 @@ Measured 2026-10-09: `forgeos` has 17 protected endpoints and 1 public,
 `knowledge` has 8 protected, `platform` has 5 and all are public. So there are
 two application surfaces to decide and no waiver case.
 
+- [ ] **Step 0: Confirm observation mode actually reaches the gateway**
+
+Added after review. `JWT_ROLES_ENFORCE` was missing from
+`docker-compose.yml`'s `environment:` allowlist, and the image renders its
+config inside the container, so the flag was accepted on the command line and
+did nothing — the observation step of this rollout would have enforced in
+silence and taken both product surfaces down. Fixed, and
+`scripts/check-template-env.sh` now fails the build if any template variable
+becomes unreachable again. Verify before trusting step 6:
+
+```bash
+JWT_ROLES_ENFORCE=false docker compose up -d gateway
+make logs 2>&1 | grep '"roles_enforce"'
+```
+
 - [ ] **Step 1: Obtain the client ids and role names from the realm**
 
 This is the one input this repository cannot derive. Ask for it, or read it:
@@ -1022,10 +1044,15 @@ spec = yaml.safe_load(open(sys.argv[1]))
 endpoints = spec["endpoints"]
 problems = []
 
-def glob_of(path):
-    # The same transformation config/krakend.tmpl applies, so what is checked
-    # here is what the plugin will actually match.
-    return re.sub(r"\{[^}]+\}", "*", path)
+def glob_of(endpoint):
+    # The same transformation config/krakend.tmpl applies -- INCLUDING the
+    # product prefix, which the template picks up because it derives from
+    # endpoints.json (post-Normalize) while this script reads endpoints.yaml
+    # (pre-Normalize). Comparing unprefixed paths would analyse strings the
+    # plugin never sees: every product currently declares prefix "", so the
+    # mistake would pass by luck and break on the first prefixed product.
+    prefix = (spec.get("products", {}).get(endpoint.get("product"), {}) or {}).get("prefix", "")
+    return re.sub(r"\{[^}]+\}", "*", prefix + endpoint["path"])
 
 rules = {}  # glob -> {(claim, roles)} , plus where each came from
 for e in endpoints:
@@ -1055,7 +1082,7 @@ for e in endpoints:
     if claim and not CLAIM.match(claim):
         problems.append(f"{where}: roles.claim {claim!r} is not a dotted claim path")
 
-    rules.setdefault(glob_of(e["path"]), set()).add((claim, tuple(sorted(any_of))))
+    rules.setdefault(glob_of(e), set()).add((claim, tuple(sorted(any_of))))
 
 # Two rules on one glob are ordinary — GET and POST on a path collapse to the
 # same glob. Two DIFFERENT rules on one glob are not: the plugin unions the

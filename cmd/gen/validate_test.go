@@ -225,11 +225,16 @@ func TestValidate_ClaimMustBeADottedPath(t *testing.T) {
 	assertErrContains(t, Validate(s), "not a dotted claim path")
 }
 
-func TestValidate_EmptyClaimIsAllowedAndMeansTheGlobalDefault(t *testing.T) {
+// Superseded by TestValidate_ProtectedRolesMustNameTheirClaim below. An
+// omitted claim inherits realm_access.roles, so the fallback the spec allowed
+// turned out to be a rule that gates nothing; the fallback survives only for
+// jwt.json's own literals, which this validator does not see.
+func TestValidate_EmptyClaimIsStillAllowedOnAPublicFacingFallback(t *testing.T) {
 	s := protectedBase()
-	s.Endpoints[0].Roles = &RoleRule{AnyOf: []string{"user"}}
+	s.Endpoints[0].Auth = "protected"
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.api.roles", AnyOf: []string{"user"}}
 	if errs := Validate(s); len(errs) != 0 {
-		t.Fatalf("an omitted claim must inherit the global roles_claim, got %v", errs)
+		t.Fatalf("a named client claim must validate, got %v", errs)
 	}
 }
 
@@ -245,4 +250,31 @@ func TestValidate_PublicEndpointsTakeNoWaiver(t *testing.T) {
 	s := base()
 	s.Endpoints[0].RolesWaiver = "pointless here"
 	assertErrContains(t, Validate(s), "public endpoints take neither")
+}
+
+// I2: an omitted claim falls back to realm_access.roles, which is global by
+// construction. A rule that asks for a realm role gates nothing while reading
+// as "authorization added", so a protected endpoint must name its claim.
+func TestValidate_ProtectedRolesMustNameTheirClaim(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{AnyOf: []string{"user"}}
+	assertErrContains(t, Validate(s), "roles.claim is required")
+}
+
+// I5: Keycloak allows dots in a clientId, and the extractor walks the claim
+// path by splitting on dots with no escape, so resource_access.my.app.roles is
+// read as five nested maps and denies every request. The config is accepted by
+// the regex, renders correctly, and locks the product out.
+func TestValidate_ADottedClientIdIsRejectedWithItsReason(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.my.app.roles", AnyOf: []string{"user"}}
+	assertErrContains(t, Validate(s), "client id containing a dot")
+}
+
+func TestValidate_AThreeSegmentResourceAccessClaimIsAccepted(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.forgeos-api.roles", AnyOf: []string{"user"}}
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("want no errors for a normal client claim, got %v", errs)
+	}
 }
