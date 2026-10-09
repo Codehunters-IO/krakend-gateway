@@ -15,7 +15,6 @@ krakend-gateway/
 │   └── settings/
 │       ├── endpoints.json            # GENERADO — no editar a mano (make gen)
 │       ├── service.json              # Nombre, puerto, timeouts
-│       ├── hosts.json                # Host por defecto de forgeos
 │       ├── cors.json                 # Configuracion CORS
 │       ├── jwt.json                  # JWT/JWKS (Keycloak)
 │       ├── session.json              # Sesion en cookie via Valkey (session-resolver)
@@ -85,7 +84,8 @@ Cada backend se declara en el bloque `backends` de `endpoints.yaml` con un
 Resolucion: el generador escribe `host_env`/`host_default` en `endpoints.json` y el
 template resuelve `{{ env $host_env | default $host_default }}` por endpoint — si la
 envvar esta seteada, gana. Compose ya las propaga con esos mismos defaults.
-`config/settings/hosts.json` solo conserva el default de `forgeos` y es vestigial.
+Ya no existe `config/settings/hosts.json`: conservaba un solo default de `forgeos` que
+ningun camino del template leia.
 
 `session-resolver` habla con `auth-bff` por su cuenta, no a traves del gateway; su URL
 se controla aparte con `AUTH_BFF_REFRESH_URL`.
@@ -717,25 +717,48 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
 
 La configuracion usa [KrakenD Flexible Configuration](https://www.krakend.io/docs/configuration/flexible-config/). Cada fichero `.json` en `settings/` se convierte en un namespace de variables en el template.
 
-Ficheros disponibles: `service.json`, `hosts.json`, `endpoints.json` (generado), `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `trace_context.json`, `accept_language.json`, `gateway_timeout.json`, `security_headers.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
+Ficheros disponibles: `service.json`, `endpoints.json` (generado), `cors.json`, `jwt.json`, `session.json` (ver [`docs/session-flow.md`](docs/session-flow.md)), `rate_limit.json`, `logging.json`, `metrics.json`, `trace_context.json`, `accept_language.json`, `gateway_timeout.json`, `security_headers.json`, `tls.json`, `client_tls.json` (ver seccion **TLS / HTTPS**).
 
 ### Servicios backend
 
-Declarados en el bloque `backends` de `endpoints.yaml`, no en `hosts.json`. Ver
+Declarados en el bloque `backends` de `endpoints.yaml`. Ver
 **Apuntar el gateway a microservicios locales** para la tabla de envvars y los casos de
 override.
 
 ### Rate Limiting
 
-Configurado en `config/settings/rate_limit.json`:
+Dos niveles, y viven en sitios distintos.
+
+**Nivel servicio**, en `config/settings/rate_limit.json`, aplicado a todo el trafico:
 
 | Parametro | Valor | Descripcion |
 |-----------|-------|-------------|
 | `service_max_rate` | 500 | Limite global de requests/s |
 | `service_client_max_rate` | 50 | Limite por cliente/s |
-| `endpoint_max_rate` | 100 | Limite por endpoint/s |
-| `endpoint_client_max_rate` | 20 | Limite por cliente por endpoint/s |
 | `strategy` | `ip` | Estrategia de identificacion |
+
+**Nivel endpoint**, declarado por endpoint en `endpoints.yaml` con la clave `rate_limit:`,
+que el generador renderiza a `qos/ratelimit/router`:
+
+```yaml
+- path: /auth/login/{provider}
+  rate_limit:
+    max_rate: 20
+    client_max_rate: 5
+    strategy: ip
+```
+
+Hoy lo llevan **2 de 31** endpoints —`GET /auth/login/{provider}` y `GET /auth/callback`—,
+los dos puntos de entrada del flujo OIDC, que son publicos y previos a cualquier token.
+Los otros cuatro endpoints publicos (`GET /auth/session`, `POST /auth/logout`,
+`POST /auth/backchannel-logout`, `GET /api/ping`) solo estan cubiertos por el limite de
+servicio.
+
+> `rate_limit.json` declaraba ademas `endpoint_max_rate: 100` y
+> `endpoint_client_max_rate: 20`. **Ningun camino del template los leia**: eran config
+> muerta documentada aqui como limite vigente. Se borraron. No hay forma de fijar un
+> default por endpoint desde ese fichero — el limite se declara endpoint por endpoint,
+> arriba.
 
 ### JWT / Keycloak
 
