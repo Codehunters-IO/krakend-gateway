@@ -127,7 +127,8 @@ revocar antes de su expiración, así que el backchannel logout deja de tener ef
   **provisionales**: el spec los deja como *Open Item* a la espera de leer *Access Token
   Lifespan* y *SSO Session Max* del realm en Keycloak. `abs_exp` debe cuadrar con *SSO Session
   Max*, o un techo más corto corta sesiones vivas y uno más largo deja de ser techo. Fijar esos
-  valores es requisito para aceptar este ADR, igual que el job de CI.
+  valores es, desde que el job de CI existe, el **único** requisito que queda para aceptar
+  este ADR.
 
 **Interacción con los realms, resuelta por ADR-0005.** Este ADR se escribió cuando ADR-0002 elegía
 realm por producto, y dejaba abierto qué ocurre con una sola cookie de sesión frente a varios
@@ -161,14 +162,17 @@ pregunta vuelve**: una cookie de sesión tendría que decir a qué realm pertene
   denegado sin tocar el almacén, y carga de solo campos no secretos
   (`TestStoreLoadRequestsOnlyNonSecretFields`).
 
-**No cubierto, y hay que decirlo.** Esos 32 tests **no corren en ningún job de CI**. El pipeline
-construye la imagen —lo que valida que los plugins compilan— y audita la configuración de
-KrakenD, pero no ejecuta `go test` de los plugins. La confirmación de este ADR está escrita y no
-aplicada hasta que exista ese job. Es exactamente la deriva que ADR-0001 registró honestamente
-al aceptarse, y nombrarla aquí es lo que evita repetirla: **este ADR no debe pasar a `accepted`
-sin ese job en verde.** Concretamente, el job debe correr `go test ./...` sobre
-`plugins/session-resolver/` en cada pull request, y fallar el check si algún test falla. Mientras
-no exista, los 32 tests son documentación ejecutable a mano, no una confirmación.
+**Aplicado en CI desde el 2026-10-07.** Cuando se escribió este ADR esos 32 tests no corrían en
+ningún job: el pipeline construía la imagen —lo que valida que los plugins compilan— y auditaba
+la configuración de KrakenD, pero no ejecutaba `go test`. La confirmación estaba escrita y no
+aplicada, exactamente la deriva que ADR-0001 registró honestamente al aceptarse, y nombrarla
+aquí es lo que evitó repetirla.
+
+Ya corren. El job `plugins` de `.github/workflows/pull-request.yml` ejecuta `make plugins-test`
+en cada pull request, que recorre los cinco módulos de `PLUGINS` —`session-resolver` entre
+ellos—, corre `go test ./...` y `go vet ./...` en cada uno, y termina con código distinto de cero
+si alguno falla. Verificado el 2026-10-09: 32 funciones `Test*` en `plugins/session-resolver/`,
+suite en verde. **La primera de las dos condiciones de aceptación está cumplida.**
 
 **Pendiente además:**
 
@@ -181,10 +185,12 @@ navegador no. MCP y CI siguen vivos mientras el front está caído.
 
 ### Condiciones para pasar a `accepted`
 
-1. Un job de CI que corra `go test ./...` sobre `plugins/session-resolver/` en cada pull request
-   y falle el check si algún test falla.
-2. Valores definitivos de los tres relojes, leídos de *Access Token Lifespan* y *SSO Session Max*
-   del realm, sustituyendo los provisionales.
+1. **Cumplida el 2026-10-07.** Un job de CI que corra `go test ./...` sobre
+   `plugins/session-resolver/` en cada pull request y falle el check si algún test falla — el job
+   `plugins`, vía `make plugins-test`.
+2. **Pendiente, y el único bloqueo que queda.** Valores definitivos de los tres relojes, leídos de
+   *Access Token Lifespan* y *SSO Session Max* del realm, sustituyendo los provisionales. Se leen
+   de la consola de Keycloak; nada en este repositorio los puede derivar.
 
 Lo demás de esta sección —métrica de `503` por clase y smoke test sobre el socket— es deuda
 reconocida, no bloqueo.
