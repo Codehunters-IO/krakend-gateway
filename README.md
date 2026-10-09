@@ -289,10 +289,28 @@ Las seis corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
 por si solo **no** corre las capas 3 a 6.
 
-Las capas 3 y 4 corren **antes** del render a proposito: son jq y python puros sobre los ficheros
-de `config/settings/`, asi que sigue respondiendo en una maquina cuyo binario
-`krakend` se haya desviado del 2.13.4 pineado (un `brew upgrade` a 3.x rompe el
-render, que pide `version: 4`).
+Las capas 3 y 4 corren **antes** del render a proposito: son jq y python puros sobre los
+ficheros de `config/settings/`, asi que responden incluso si el render no puede correr.
+
+### Que version de `krakend` usan las capas 5 y 6
+
+La que esta pineada, no la que tengas instalada. `scripts/krakend-check.sh` usa el binario
+local si su version coincide con `KRAKEND_IMAGE` del `Makefile`, y si no, corre esa imagen
+montando el workspace en la **misma ruta** para que `FC_SETTINGS` y `FC_OUT` resuelvan igual
+dentro y fuera. Lo dice por stderr cuando cae a la imagen.
+
+Existe porque la config declara `"version": 3`, que KrakenD 2.x lee y 3.x rechaza:
+
+```
+ERROR parsing the configuration file: unsupported version: 3 (want: 4)
+```
+
+Un `brew upgrade` basta para meter 3.x, y a partir de ahi `make check`, `make generate` y
+`check-plugin-chain-order.sh` fallaban sobre un repo que esta perfectamente bien. CI nunca
+lo vio porque shimea `krakend` a la imagen pineada.
+
+Si no hay binario con la version correcta ni docker, falla diciendolo. `KRAKEND_IMAGE` en el
+entorno pisa el pin.
 
 ### Rutas publicas y `skip_paths`
 
