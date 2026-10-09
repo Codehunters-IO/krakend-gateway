@@ -40,6 +40,7 @@ func newStore(cfg *pluginConfig) (*store, error) {
 	timeout := time.Duration(cfg.ValkeyTimeoutMs) * time.Millisecond
 	client, err := valkey.NewClient(valkey.ClientOption{
 		InitAddress:       []string{cfg.ValkeyAddr},
+		Username:          cfg.ValkeyUsername,
 		Password:          cfg.ValkeyPassword,
 		SelectDB:          cfg.ValkeyDB,
 		Dialer:            net.Dialer{Timeout: timeout},

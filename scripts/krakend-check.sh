@@ -28,6 +28,11 @@ TEMPLATE="${1:?usage: krakend-check.sh <template> [args...]}"
 shift || true
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Read below for why this is needed; it is also a reminder that `set -u` does
+# not save you inside a process substitution. An undefined variable there kills
+# only the subshell, so the loop reading from it simply sees no input and the
+# script carries on as if the list were empty.
+SETTINGS_DIR="${FC_SETTINGS:-$ROOT_DIR/config/settings}"
 
 # The pin lives in the Makefile and is read from there, so there is exactly one
 # place to bump it.
@@ -71,9 +76,40 @@ if [[ -n "$have" ]]; then
   echo "krakend-check: local krakend is $have, this repository targets $want — running $KRAKEND_IMAGE instead." >&2
 fi
 
+# Forwarding FC_* alone renders every `env "..."` lookup in the template as the
+# empty string, because the container does not inherit the shell's environment.
+# `make check` would still pass — empty values are valid config — while
+# `make generate` would quietly write a krakend.json with no secrets, no hosts
+# and no issuer in it. So forward exactly the variables the template reads,
+# parsed out of the template itself rather than kept in a list here that would
+# drift. `-e NAME` with no value passes the host's value when set and is
+# ignored when not, which is the behaviour the `| default` pipelines expect.
+#
+# Two sources, because the template looks variables up in two ways. Literal
+# `env "NAME"` is grep-able from the template. Backend hosts are not: the
+# template does `env $e.host_env`, so the NAMES live in the generated
+# endpoints.json (AUTH_BFF_HOST, FORGEOS_HOST, ...) and a grep over the
+# template finds none of them. Missing those renders every backend host as its
+# compiled-in default, which is the one failure that would look like working
+# config pointed at the wrong services.
+#
+# bash 3.2 on macOS has no mapfile, hence the read loop.
+env_args=(-e FC_ENABLE -e FC_SETTINGS -e FC_OUT)
+while IFS= read -r var; do
+  [[ -n "$var" ]] && env_args+=(-e "$var")
+done < <(
+  {
+    grep -oE 'env "[A-Za-z_][A-Za-z0-9_]*"' "$TEMPLATE" |
+      sed -E 's/env "([A-Za-z_][A-Za-z0-9_]*)"/\1/'
+    grep -ohE '"host_env"[[:space:]]*:[[:space:]]*"[A-Za-z_][A-Za-z0-9_]*"' \
+      "$SETTINGS_DIR"/*.json 2>/dev/null |
+      sed -E 's/.*"([A-Za-z_][A-Za-z0-9_]*)"$/\1/'
+  } | sort -u
+)
+
 exec docker run --rm \
   --user "$(id -u):$(id -g)" \
-  -e FC_ENABLE -e FC_SETTINGS -e FC_OUT \
+  "${env_args[@]}" \
   -v "$ROOT_DIR:$ROOT_DIR" \
   -w "$PWD" \
   "$KRAKEND_IMAGE" check -d -t -c "$TEMPLATE" "$@"

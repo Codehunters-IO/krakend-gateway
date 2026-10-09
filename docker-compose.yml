@@ -42,6 +42,7 @@ services:
       # Valkey and turns it into an Authorization: Bearer header.
       - SESSION_ENABLED=${SESSION_ENABLED:-}
       - VALKEY_ADDR=${VALKEY_ADDR:-valkey:6379}
+      - VALKEY_USERNAME=${VALKEY_USERNAME:-}
       - VALKEY_PASSWORD=${VALKEY_PASSWORD:-devpassword}
       - SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME:-sid}
       - AUTH_BFF_REFRESH_URL=${AUTH_BFF_REFRESH_URL:-http://host.docker.internal:8086/internal/sessions/{sid}/refresh}

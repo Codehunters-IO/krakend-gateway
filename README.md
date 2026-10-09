@@ -737,6 +737,14 @@ porque la sesion viaja en cookie.
 **Sesion fail-closed.** `session-resolver` deniega ante cualquier duda y exige
 `Origin`/`Referer` permitido en metodos mutantes. Ver [`docs/session-flow.md`](docs/session-flow.md).
 
+**Minimo privilegio sobre Valkey.** El plugin emite cuatro comandos —`HMGET`, `TTL`,
+`EXPIRE`, `DEL`— y solo bajo `v1:session:*`. `VALKEY_USERNAME` selecciona el usuario ACL
+con el que se autentica; **vacio significa el usuario `default`, que puede leer cualquier
+clave y borrar la base**. La ACL exacta y las dos trampas que tiene (entre ellas que un
+usuario `nopass` acepta cualquier contrasena, asi que una ACL mal puesta no falla: cae a
+`default`) estan en
+[Least privilege on the store](docs/session-flow.md#least-privilege-on-the-store).
+
 ### Rutas exentas de JWT
 
 Derivadas del spec de endpoints, no mantenidas a mano — ver

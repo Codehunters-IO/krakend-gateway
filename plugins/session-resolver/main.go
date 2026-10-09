@@ -37,7 +37,13 @@ func (r registerer) RegisterHandlers(f func(
 // checking a large logical pool in and out per call. A pool-size knob would
 // have nothing to control, so it is dropped rather than kept and ignored.
 type pluginConfig struct {
-	ValkeyAddr            string   `json:"valkey_addr"`
+	ValkeyAddr string `json:"valkey_addr"`
+	// ValkeyUsername selects a Valkey ACL user. Empty means legacy AUTH, which
+	// authenticates as `default` — a user with every permission on every key.
+	// The edge only ever needs HMGET, TTL, EXPIRE and DEL on its own key
+	// prefix, so running as `default` grants it the ability to read every
+	// session in the store and to delete the store. See the ACL in README.md.
+	ValkeyUsername        string   `json:"valkey_username"`
 	ValkeyPassword        string   `json:"valkey_password"`
 	ValkeyDB              int      `json:"valkey_db"`
 	ValkeyTimeoutMs       int      `json:"valkey_timeout_ms"`
