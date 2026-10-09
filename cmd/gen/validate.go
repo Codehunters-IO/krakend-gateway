@@ -2,8 +2,14 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// claimPath accepts a dotted claim path of at least two segments:
+// "resource_access.forgeos-api.roles" passes, a bare "roles" does not. Client
+// ids carry hyphens, so they are legal after the first separator.
+var claimPath = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+)+$`)
 
 var validMethods = map[string]bool{
 	"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true,
@@ -53,6 +59,20 @@ func Validate(spec Spec) []error {
 		}
 		if e.Auth != "public" && e.Auth != "protected" {
 			errs = append(errs, fmt.Errorf("%s: invalid auth %q", where, e.Auth))
+		}
+		if e.Roles != nil && e.RolesWaiver != "" {
+			errs = append(errs, fmt.Errorf("%s: roles and roles_waiver are mutually exclusive", where))
+		}
+		if e.Auth == "public" && (e.Roles != nil || e.RolesWaiver != "") {
+			errs = append(errs, fmt.Errorf("%s: public endpoints take neither roles nor roles_waiver", where))
+		}
+		if e.Roles != nil {
+			if len(e.Roles.AnyOf) == 0 {
+				errs = append(errs, fmt.Errorf("%s: roles.any_of must list at least one role", where))
+			}
+			if e.Roles.Claim != "" && !claimPath.MatchString(e.Roles.Claim) {
+				errs = append(errs, fmt.Errorf("%s: roles.claim %q is not a dotted claim path", where, e.Roles.Claim))
+			}
 		}
 		// Key on the EXPOSED path (exposedPath, shared with Normalize). Two products
 		// can each declare /api/ping as long as their prefixes differ; with equal

@@ -28,6 +28,15 @@ type RateLimit struct {
 	Strategy      string  `yaml:"strategy" json:"strategy"`
 }
 
+// RoleRule is the optional per-endpoint authorization decision. Claim is a
+// dot-notation claim path; empty inherits the plugin's global roles_claim.
+// AnyOf is satisfied when the token holds at least one of the listed roles --
+// the gate is coarse on purpose, one decision per application surface.
+type RoleRule struct {
+	Claim string   `yaml:"claim" json:"claim"`
+	AnyOf []string `yaml:"any_of" json:"any_of"`
+}
+
 // Endpoint is one route. Fields with json:"-" are consumed during normalize
 // and not emitted; the rest are emitted into endpoints.json in this order.
 type Endpoint struct {
@@ -46,6 +55,8 @@ type Endpoint struct {
 	InputQueryStrings   []string   `yaml:"input_query_strings" json:"input_query_strings"`
 	Timeout             string     `yaml:"timeout" json:"timeout"`
 	RateLimit           *RateLimit `yaml:"rate_limit" json:"rate_limit"`
+	Roles               *RoleRule  `yaml:"roles" json:"roles"`
+	RolesWaiver         string     `yaml:"roles_waiver" json:"-"`
 }
 
 // Spec is the full endpoints.yaml document.

@@ -199,3 +199,50 @@ func assertErrContains(t *testing.T, errs []error, want string) {
 	}
 	t.Fatalf("want an error containing %q, got %v", want, errs)
 }
+
+func protectedBase() Spec {
+	s := base()
+	s.Endpoints[0].Auth = "protected"
+	return s
+}
+
+func TestValidate_RolesAndWaiverAreMutuallyExclusive(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.api.roles", AnyOf: []string{"user"}}
+	s.Endpoints[0].RolesWaiver = "both at once"
+	assertErrContains(t, Validate(s), "mutually exclusive")
+}
+
+func TestValidate_RolesNeedsAtLeastOneRole(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.api.roles"}
+	assertErrContains(t, Validate(s), "any_of must list at least one role")
+}
+
+func TestValidate_ClaimMustBeADottedPath(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{Claim: "roles", AnyOf: []string{"user"}}
+	assertErrContains(t, Validate(s), "not a dotted claim path")
+}
+
+func TestValidate_EmptyClaimIsAllowedAndMeansTheGlobalDefault(t *testing.T) {
+	s := protectedBase()
+	s.Endpoints[0].Roles = &RoleRule{AnyOf: []string{"user"}}
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("an omitted claim must inherit the global roles_claim, got %v", errs)
+	}
+}
+
+// Review Focus 5: a public endpoint leaves through skip_paths before the gate
+// runs, so a rule on it can never fire. Dead config, caught at build time.
+func TestValidate_PublicEndpointsTakeNoRoles(t *testing.T) {
+	s := base() // auth: public
+	s.Endpoints[0].Roles = &RoleRule{Claim: "resource_access.api.roles", AnyOf: []string{"user"}}
+	assertErrContains(t, Validate(s), "public endpoints take neither")
+}
+
+func TestValidate_PublicEndpointsTakeNoWaiver(t *testing.T) {
+	s := base()
+	s.Endpoints[0].RolesWaiver = "pointless here"
+	assertErrContains(t, Validate(s), "public endpoints take neither")
+}

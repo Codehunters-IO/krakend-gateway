@@ -16,7 +16,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects",
@@ -35,7 +36,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/stream",
@@ -54,7 +56,8 @@
       ],
       "input_query_strings": [],
       "timeout": "3600s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     }
   ]
 }
