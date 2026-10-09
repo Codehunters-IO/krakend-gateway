@@ -130,7 +130,22 @@
         ],
         "required_claims": {{ marshal .jwt.required_claims }},
         "roles_claim": "{{ .jwt.roles_claim }}",
-        "required_roles": {{ marshal .jwt.required_roles }},
+        {{/* required_roles is DERIVED from the endpoint spec, exactly like
+             skip_paths above it. required_roles lived in jwt.json as a
+             hand-maintained list of globs and sat empty, which meant every
+             protected route admitted any token the realm signed. Keeping route
+             knowledge outside the route spec is the same mistake skip_paths
+             already paid for. jwt.json's own list is concatenated for rules
+             that belong to no declared endpoint. */}}
+        {{- $roleRules := .jwt.required_roles }}
+        {{- range .endpoints.endpoints }}
+          {{- if .roles }}
+            {{- $claim := .roles.claim | default $.jwt.roles_claim }}
+            {{- $glob := regexReplaceAll "\\{[^}]+\\}" .path "*" }}
+            {{- $roleRules = append $roleRules (dict "path" $glob "claim" $claim "roles" .roles.any_of) }}
+          {{- end }}
+        {{- end }}
+        "required_roles": {{ marshal $roleRules }},
         "add_ip_header": {{ .jwt.add_ip_header }},
         "ip_header_name": "{{ .jwt.ip_header_name }}",
         "introspection_enabled": {{ .jwt.introspection_enabled }},
