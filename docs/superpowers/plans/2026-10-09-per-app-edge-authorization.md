@@ -21,7 +21,7 @@
 - The runtime keeps admitting paths no rule matches. Enforcement of completeness is a build failure, never a runtime default flip.
 - Rules are coarse per application surface. No method matching, no per-resource rules: `GET` and `POST` on one path share a rule by design.
 - Every new guard gets mutation testing: break the thing it guards and some test must fail.
-- Commits carry `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` (this is a Codehunters repository). Run both attribution filters before any push.
+- Commits follow this organization's attribution convention, which lives in the author's own rules and not in this repository. Run both attribution filters before any push, over the message and over the diff.
 - No secrets, no tokens, no `sub` in log lines.
 
 ## Review Focus
@@ -195,7 +195,7 @@ through skip_paths before the gate runs, so a rule there could never fire.
 
 No endpoint declares a rule yet, so endpoints.json gains only \"roles\": null.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+<attribution trailer per the convention above>"
 ```
 
 ---
@@ -323,7 +323,7 @@ rules tied to no declared endpoint.
 Verified by render: empty while no endpoint declares a rule, and a rule on
 /api/projects/{projectId}/stories renders as /api/projects/*/stories.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+<attribution trailer per the convention above>"
 ```
 
 ---
@@ -783,7 +783,7 @@ into an outage.
 
 Five mutations applied, each caught.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+<attribution trailer per the convention above>"
 ```
 
 ---
@@ -962,7 +962,7 @@ nothing about which application the holder may enter.
 ADR-0006 records the decision, what was considered, and the client ids and role
 names this depends on.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+<attribution trailer per the convention above>"
 ```
 
 ---
@@ -1188,7 +1188,7 @@ by comparing globs for equality.
 
 Eight mutations applied, each caught.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+<attribution trailer per the convention above>"
 ```
 
 ---
