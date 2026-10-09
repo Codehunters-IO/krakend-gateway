@@ -225,14 +225,14 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 
 		// Mandatory auth from here on: JWKS must be ready.
 		if !ready {
-			http.Error(w, `{"message":"service not ready, JWKS not loaded yet"}`, http.StatusServiceUnavailable)
+			deny(w, http.StatusServiceUnavailable, `{"message":"service not ready, JWKS not loaded yet"}`)
 			return
 		}
 
 		// Extract Bearer token
 		authHeader := req.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, `{"message":"missing or invalid authorization header"}`, http.StatusUnauthorized)
+			deny(w, http.StatusUnauthorized, `{"message":"missing or invalid authorization header"}`)
 			return
 		}
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
@@ -250,13 +250,13 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 				errMsg = err.Error()
 			}
 			logger.Warn("invalid token", "err", errMsg, "path", req.URL.Path)
-			http.Error(w, `{"message":"invalid or expired token"}`, http.StatusUnauthorized)
+			deny(w, http.StatusUnauthorized, `{"message":"invalid or expired token"}`)
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, `{"message":"invalid token claims"}`, http.StatusUnauthorized)
+			deny(w, http.StatusUnauthorized, `{"message":"invalid token claims"}`)
 			return
 		}
 
@@ -264,7 +264,7 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 		for _, rc := range cfg.RequiredClaims {
 			if extractClaim(claims, rc) == "" {
 				logger.Warn("token missing required claim", "claim", rc, "path", req.URL.Path)
-				http.Error(w, `{"message":"token missing required claim"}`, http.StatusUnauthorized)
+				deny(w, http.StatusUnauthorized, `{"message":"token missing required claim"}`)
 				return
 			}
 		}
@@ -285,7 +285,7 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 				logger.Warn("introspection failed, allowing token", "err", ierr.Error(), "path", req.URL.Path)
 			} else if !active {
 				logger.Warn("token inactive (revoked or logged out)", "path", req.URL.Path)
-				http.Error(w, `{"message":"token is no longer active"}`, http.StatusUnauthorized)
+				deny(w, http.StatusUnauthorized, `{"message":"token is no longer active"}`)
 				return
 			}
 		}
@@ -293,7 +293,7 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 		// Enforce per-endpoint role requirements (RBAC at the edge).
 		if !hasRequiredRole(cfg, claims, req.URL.Path) {
 			logger.Warn("forbidden: missing required role", "path", req.URL.Path)
-			http.Error(w, `{"message":"forbidden: missing required role"}`, http.StatusForbidden)
+			deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
 			return
 		}
 
@@ -534,6 +534,27 @@ func parseConfig(extra map[string]interface{}) (*pluginConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// deny writes an edge rejection with the headers a JSON error response needs.
+//
+// http.Error, which this replaces, sends "text/plain; charset=utf-8" over a
+// JSON body and no cache directive. The mislabelled type made every caller
+// guess, and a 401 without no-store may be cached by an intermediary and
+// replayed to a request that would have succeeded. nosniff is set because the
+// body is attacker-influenced only in its status, but a mislabelled JSON body
+// is exactly what content sniffing turns into a rendered document.
+//
+// Plugins wrap the router, so they run before KrakenD's security/http
+// middleware: nothing it sets reaches a response written here. That is why
+// these three headers are set in the plugin rather than left to settings.
+func deny(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	// The trailing newline keeps the bytes identical to http.Error's output.
+	_, _ = fmt.Fprintln(w, body)
 }
 
 func main() {}

@@ -382,10 +382,10 @@ Los cinco modulos tienen tests, y corren en CI (`make plugins-test`, job
 
 | Plugin | Funciones `Test*` | Que cubren |
 |--------|------------------:|------------|
-| `session-resolver` | 32 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp` |
+| `session-resolver` | 36 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp`, cabeceras del rechazo |
 | `gateway-timeout` | 24 | `500` vacio y lento → `504`; body o rapidez lo impiden; `503` intacto; Flush retenido |
+| `jwt-headers` | 22 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos, cabeceras del rechazo |
 | `trace-context` | 16 | Propagacion, fallback de `Trace-Id`, generacion, 18 formas malformadas |
-| `jwt-headers` | 13 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos |
 | `accept-language` | 13 | Default solo cuando falta, nunca pisa al cliente |
 
 Cada suite se valido con **mutation testing**: se rompe el plugin a proposito y se
@@ -712,6 +712,20 @@ estricta por endpoint.
 **Cabeceras de seguridad en las respuestas.** Modulo `security/http` activo — ver
 [Cabeceras de seguridad](#cabeceras-de-seguridad-configsettingssecurity_headersjson).
 Decision en [ADR-0001](docs/adr/0001-security-headers-edge.md).
+
+**Cabeceras en los rechazos del borde.** `security/http` **no las cubre**: los plugins
+envuelven el router, asi que un `401` escrito por `jwt-headers` o `session-resolver`
+responde antes de que ese modulo corra. Los dos plugins las ponen ellos mismos en cada
+denegacion:
+
+| Cabecera | Valor | Por que |
+|---|---|---|
+| `Content-Type` | `application/json; charset=utf-8` | El cuerpo es JSON. Antes decia `text/plain` sobre un cuerpo JSON |
+| `Cache-Control` | `no-store` | Un `401` cacheable puede reusarse contra una peticion que si habria pasado |
+| `X-Content-Type-Options` | `nosniff` | Un cuerpo JSON mal etiquetado es justo lo que el sniffing renderiza como documento |
+
+Las respuestas que **si** pasan al backend no las heredan: la politica de cache de una
+respuesta valida la decide el backend, no el borde.
 
 **CORS restringido.** `allow_origins`, `allow_methods` y `allow_headers` son listas
 explicitas en `config/settings/cors.json`; no hay wildcard. `allow_credentials: true`

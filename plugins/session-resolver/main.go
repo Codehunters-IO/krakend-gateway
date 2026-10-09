@@ -328,7 +328,13 @@ func toRequest(req *http.Request, cookieName string) request {
 func deny(w http.ResponseWriter, req *http.Request, status int, outcome string) {
 	logger.Info("request denied", "path", req.URL.Path, "method", req.Method,
 		"status", status, "outcome", outcome)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// A 401 without no-store may be cached by an intermediary and replayed to
+	// a request that would have succeeded. nosniff because a mislabelled JSON
+	// body is what content sniffing renders as a document. Plugins run before
+	// KrakenD's security/http middleware, so nothing it sets reaches here.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
 }
