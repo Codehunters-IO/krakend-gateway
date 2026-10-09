@@ -459,7 +459,11 @@ keep working unchanged. This is the guarantee that dual mode has not regressed.
 
 ## Open Items
 
-- Exact `SSO Session Max` and `Access Token Lifespan` values in the Keycloak realm must
-  be read before fixing `abs_exp` and the refresh threshold.
+- ~~Exact `SSO Session Max` and `Access Token Lifespan` values in the Keycloak realm must
+  be read before fixing `abs_exp` and the refresh threshold.~~ **Closed 2026-10-09**, from
+  `react-shell-launcher/keycloak/realm-codehunters.json`: `accessTokenLifespan` 300 s,
+  `ssoSessionIdleTimeout` 1800 s, `ssoSessionMaxLifespan` 36000 s, `rememberMe` not enabled.
+  All three match the provisional values this document used, because the realm never changed
+  them from Keycloak's defaults. See ADR-0003, now accepted.
 - Choice between mTLS and a shared token for `/internal/*` depends on the target
   deployment topology, which is not yet defined for `auth-bff`.

@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-05
+accepted-date: 2026-10-09
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos]
@@ -149,12 +150,25 @@ revocar antes de su expiración, así que el backchannel logout deja de tener ef
   SSO de Keycloak.
 - **Neutral** — Tres relojes independientes que hay que mantener alineados: `exp` como campo que
   dispara el refresh, el TTL de inactividad como TTL real de la clave, y `abs_exp` como techo
-  duro que no se extiende. Los valores que maneja el diseño —~5 min, 30 min y 10 h— son
-  **provisionales**: el spec los deja como *Open Item* a la espera de leer *Access Token
-  Lifespan* y *SSO Session Max* del realm en Keycloak. `abs_exp` debe cuadrar con *SSO Session
-  Max*, o un techo más corto corta sesiones vivas y uno más largo deja de ser techo. Fijar esos
-  valores es, desde que el job de CI existe, el **único** requisito que queda para aceptar
-  este ADR.
+  duro que no se extiende. **Valores definitivos, leídos el 2026-10-09** de
+  `react-shell-launcher/keycloak/realm-codehunters.json`, el export versionado del realm de
+  plataforma:
+
+  | Reloj | Campo del realm | Valor | Dónde se aplica |
+  |---|---|---|---|
+  | `exp` | `accessTokenLifespan` | **300 s** (5 min) | campo en Valkey, lo escribe `auth-bff` |
+  | TTL de inactividad | `ssoSessionIdleTimeout` | **1800 s** (30 min) | `session.json`, `idle_ttl_seconds` |
+  | `abs_exp` | `ssoSessionMaxLifespan` | **36000 s** (10 h) | campo en Valkey, una vez al login |
+
+  Los tres coinciden con los provisionales que manejaba el diseño, porque el realm no los ha
+  tocado: son los valores de fábrica de Keycloak. `config/settings/jwt.json` y
+  `config/settings/session.json` ya están alineados —`idle_ttl_seconds: 1800` es exactamente
+  `ssoSessionIdleTimeout`, y `refresh_threshold_seconds: 30` queda muy por debajo de los 300 s
+  de `exp`—, así que aceptar este ADR no cambia una línea de configuración.
+
+  `rememberMe` **no está habilitado** en el realm, lo que importa porque si lo estuviera Keycloak
+  usaría `ssoSessionIdleTimeoutRememberMe` y `ssoSessionMaxLifespanRememberMe` en su lugar y el
+  techo real podría ser de días en vez de 10 h. Habilitarlo obliga a revisar `abs_exp`.
 
 **Interacción con los realms, resuelta por ADR-0005.** Este ADR se escribió cuando ADR-0002 elegía
 realm por producto, y dejaba abierto qué ocurre con una sola cookie de sesión frente a varios
@@ -187,6 +201,15 @@ pregunta vuelve**: una cookie de sesión tendría que decir a qué realm pertene
 - Techo `abs_exp` (`TestRefreshAbsExpCeiling`), token almacenado vacío denegado, `sid` malformado
   denegado sin tocar el almacén, y carga de solo campos no secretos
   (`TestStoreLoadRequestsOnlyNonSecretFields`).
+
+**Estado al aceptar (2026-10-09).** Las dos condiciones están cumplidas y la deuda que queda
+—métrica de `503` por clase de error y smoke test sobre el socket— está reconocida abajo y no
+bloquea, igual que ADR-0001 registró la suya al aceptarse. Una reserva que conviene nombrar: el
+TTL de inactividad vive en este repositorio y su contraparte vive en el realm, en otro
+repositorio, y **nada comprueba que sigan de acuerdo**. Si alguien cambia
+`ssoSessionIdleTimeout` sin tocar `idle_ttl_seconds`, la clave de sesión sobrevive a una sesión
+SSO ya muerta y el refresh falla cuando toque, sin que nada se ponga rojo. Un guardia no puede
+cerrarlo desde aquí porque el export está fuera; queda como deuda con dueño conocido.
 
 **Aplicado en CI desde el 2026-10-07.** Cuando se escribió este ADR esos 32 tests no corrían en
 ningún job: el pipeline construía la imagen —lo que valida que los plugins compilan— y auditaba
@@ -233,9 +256,10 @@ navegador no. MCP y CI siguen vivos mientras el front está caído.
 1. **Cumplida el 2026-10-07.** Un job de CI que corra `go test ./...` sobre
    `plugins/session-resolver/` en cada pull request y falle el check si algún test falla — el job
    `plugins`, vía `make plugins-test`.
-2. **Pendiente, y el único bloqueo que queda.** Valores definitivos de los tres relojes, leídos de
-   *Access Token Lifespan* y *SSO Session Max* del realm, sustituyendo los provisionales. Se leen
-   de la consola de Keycloak; nada en este repositorio los puede derivar.
+2. **Cumplida el 2026-10-09.** Valores definitivos de los tres relojes. No salieron de la consola
+   sino del export versionado del realm, `react-shell-launcher/keycloak/realm-codehunters.json`,
+   que es una fuente mejor: viaja en git, se revisa en una pull request y no depende de que una
+   instancia esté levantada. Los valores y su efecto están en *Consequences*.
 
 Lo demás de esta sección —métrica de `503` por clase y smoke test sobre el socket— es deuda
 reconocida, no bloqueo.
