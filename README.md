@@ -778,9 +778,9 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
    sube. Corre en cada PR en el job `Security headers smoke test`. Lo que **no** cubre: las
    respuestas no pasan por la cadena de plugins, porque el test corre con todos los flags
    apagados; una denegacion del borde lleva sus propias cabeceras (ver PR #24).
-4. **`X-Organization-Id` en `allow_headers` es config muerta.** El plugin lo borra en toda
-   peticion, asi que permitirlo en el preflight no habilita nada. Quitarlo evita sugerir
-   que el cliente puede fijarlo.
+4. **`X-Organization-Id` en `allow_headers`.** El plugin lo borra en toda peticion, asi que
+   permitirlo en el preflight no habilita nada hoy. **Decidido el 2026-10-09**: se queda, como
+   el resto de las perillas de CORS, para cuando se necesite. No es deuda.
 
 ## Configuracion
 

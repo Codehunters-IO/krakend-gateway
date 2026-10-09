@@ -180,6 +180,28 @@ else
   echo "  ok     Strict-Transport-Security absent while HSTS_SECONDS=0"
 fi
 
+# Two facts about the router, measured here because two reviews flagged them as
+# unverified and the answer changes how a finding is graded.
+#
+# An uncleaned path is REDIRECTED, not served. That matters because the role
+# gate matches path globs segment by segment, so /api//projects matches no rule;
+# if the router served it as /api/projects, that would be an authorization
+# bypass. It answers 301 instead, so the client has to come back on the
+# canonical path where the rule applies. If this ever starts returning 200, the
+# bypass is real and the role tests in plugins/jwt-headers need revisiting.
+echo "  --- uncleaned paths are redirected, not served ---"
+for variant in "/api//projects" "/API/projects" "/api/projects/" "/api/projects/."; do
+  code="$(curl -ks -o /dev/null -w '%{http_code}' --path-as-is "https://localhost:$PORT$variant")"
+  if [[ "$code" == "301" ]]; then
+    echo "  ok     $variant -> 301"
+  else
+    echo "  FAILED $variant -> $code, want 301. The router now serves an uncleaned" >&2
+    echo "         path as the matched route, which makes the role gate's" >&2
+    echo "         segment-by-segment globs bypassable. See ADR-0006." >&2
+    fail=1
+  fi
+done
+
 render 31536000
 start
 want_header "Strict-Transport-Security" "max-age=31536000; includeSubDomains" "$(probe /api/ping)"
