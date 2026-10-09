@@ -167,6 +167,7 @@ make build
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
 | `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
 | `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
+| `make plugins-loaded` | Falla si el gateway en marcha no registro los cinco plugins |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |

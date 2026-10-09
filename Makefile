@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check smoke-headers up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -124,8 +124,17 @@ dev: plugin-build up ## Build plugins and start locally (full local dev)
 build: ## Build Docker image (production)
 	docker build -t codehunters-gw-krakend .
 
-up: ## Start with docker-compose
+up: ## Start with docker-compose, then gate on the plugins having loaded
 	docker compose up -d
+	@echo "waiting for the gateway to register its plugins..."
+	@for i in $$(seq 1 20); do \
+		sleep 1; \
+		./scripts/check-plugins-loaded.sh >/dev/null 2>&1 && break; \
+	done
+	@./scripts/check-plugins-loaded.sh
+
+plugins-loaded: ## Fail if the running gateway did not register every plugin
+	./scripts/check-plugins-loaded.sh
 
 down: ## Stop docker-compose services
 	docker compose down
