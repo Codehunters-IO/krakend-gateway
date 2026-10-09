@@ -40,7 +40,7 @@ fi
 FC_ENABLE=1 \
 FC_SETTINGS="$SETTINGS_DIR" \
 FC_OUT="$OUT_FILE" \
-krakend check -d -t -c "$TEMPLATE" >/dev/null
+"$ROOT_DIR/scripts/krakend-check.sh" "$TEMPLATE" >/dev/null
 
 names=$(jq -c '(.extra_config."plugin/http-server".name // [])' "$OUT_FILE")
 has_session=$(echo "$names" | jq 'any(. == "krakend-session-resolver")')
