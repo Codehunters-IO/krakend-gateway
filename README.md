@@ -167,6 +167,7 @@ make build
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
 | `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
 | `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
+| `make plugins-loaded` | Falla si el gateway en marcha no registro los cinco plugins |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
@@ -778,9 +779,9 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
    sube. Corre en cada PR en el job `Security headers smoke test`. Lo que **no** cubre: las
    respuestas no pasan por la cadena de plugins, porque el test corre con todos los flags
    apagados; una denegacion del borde lleva sus propias cabeceras (ver PR #24).
-4. **`X-Organization-Id` en `allow_headers` es config muerta.** El plugin lo borra en toda
-   peticion, asi que permitirlo en el preflight no habilita nada. Quitarlo evita sugerir
-   que el cliente puede fijarlo.
+4. **`X-Organization-Id` en `allow_headers`.** El plugin lo borra en toda peticion, asi que
+   permitirlo en el preflight no habilita nada hoy. **Decidido el 2026-10-09**: se queda, como
+   el resto de las perillas de CORS, para cuando se necesite. No es deuda.
 
 ## Configuracion
 
