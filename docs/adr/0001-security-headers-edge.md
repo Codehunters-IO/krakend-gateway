@@ -87,6 +87,32 @@ render no es lo mismo que comprobar lo que sale por el socket. El monitor sinté
 tampoco. `hsts.seconds` sigue en `0` porque el entorno de desarrollo va sobre HTTP plano;
 el bloque HSTS sólo se renderiza con `tls.disabled=false`.
 
+**Estado de la confirmación el 2026-10-09.** El smoke test existe:
+`scripts/smoke-security-headers.sh`, vía `make smoke-headers`, en el job
+`Security headers smoke test` de cada pull request. Arranca la imagen pineada, pide una
+respuesta real y asevera las tres cabeceras más `Referrer-Policy`, `X-XSS-Protection` y HSTS
+**en las dos direcciones**: ausente con `HSTS_SECONDS=0`, y `max-age=31536000;
+includeSubDomains` cuando se sube.
+
+Escribirlo corrigió dos cosas de este ADR, las dos medidas, no deducidas:
+
+1. **`/__health` no sirve para lo que este ADR le pedía.** El punto de confirmación dice
+   `curl -kI https://gateway/__health`, y ese endpoint **no lleva ninguna cabecera de
+   seguridad**: `security/http` no envuelve el endpoint propio de KrakenD. El test que pedía
+   este ADR era insatisfacible como estaba escrito, y habría fallado por un motivo ajeno a la
+   decisión. Las aserciones corren contra un endpoint enrutado, que es donde va el tráfico
+   real; que `/__health` vaya sin cabeceras queda aseverado como lo que es, un límite medido.
+2. **`/__health` devolvía `401`.** No estaba en los `skip_paths` de `jwt-headers`, y los
+   plugins envuelven el servidor entero. Arreglado el mismo día, y el test lo comprueba sobre
+   el render con los plugins activos, porque corre con ellos apagados y ahí la aserción sería
+   vacua — lo detectó mutation testing.
+
+Lo que el smoke test **no** cubre: las respuestas no atraviesan la cadena de plugins. Una
+denegación del borde lleva sus propias cabeceras, puestas por el plugin, porque responde antes
+de que `security/http` corra. Eso tiene sus propios tests en `plugins/jwt-headers`.
+
+El monitor sintético del tercer punto sigue sin existir.
+
 ## Pros and Cons of the Options
 
 ### 1. Módulo `security/http` (elegido)

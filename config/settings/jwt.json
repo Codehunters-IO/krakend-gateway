@@ -11,7 +11,8 @@
     { "claim": "slug", "header": "x-org-slug" }
   ],
   "skip_paths": [
-    "/public/*"
+    "/public/*",
+    "/__health"
   ],
   "add_ip_header": true,
   "ip_header_name": "x-ip",

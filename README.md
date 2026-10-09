@@ -166,6 +166,7 @@ make build
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
 | `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
+| `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
@@ -770,9 +771,13 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
    tiene esa garantia.
 2. **HSTS apagado.** `hsts.seconds = 0` mientras se trabaja sobre HTTP plano. Subirlo con
    `HSTS_SECONDS` al desplegar con TLS; solo se renderiza si `tls.disabled=false`.
-3. **Falta el smoke test de ADR-0001.** El ADR pide un `curl -kI` en CI que compruebe las
-   tres cabeceras en una respuesta real. `make check` valida el render del template, que
-   no es lo mismo que verificar lo que sale por el socket.
+3. ~~**Falta el smoke test de ADR-0001.**~~ **Hecho el 2026-10-09**:
+   `make smoke-headers` arranca el gateway con la imagen pineada, le pide una respuesta real
+   y asevera las tres cabeceras mas `Referrer-Policy`, `X-XSS-Protection` y HSTS **en las dos
+   direcciones** — ausente con `HSTS_SECONDS=0`, presente y con `includeSubDomains` cuando se
+   sube. Corre en cada PR en el job `Security headers smoke test`. Lo que **no** cubre: las
+   respuestas no pasan por la cadena de plugins, porque el test corre con todos los flags
+   apagados; una denegacion del borde lleva sus propias cabeceras (ver PR #24).
 4. **`X-Organization-Id` en `allow_headers` es config muerta.** El plugin lo borra en toda
    peticion, asi que permitirlo en el preflight no habilita nada. Quitarlo evita sugerir
    que el cliente puede fijarlo.

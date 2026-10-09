@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Fails when config/krakend.tmpl reads an environment variable that
-# docker-compose.yml never passes into the container.
+# Fails when the template and the compose environment disagree in EITHER
+# direction: a variable the template reads that compose never passes, or a
+# variable compose passes that nothing reads.
 #
 # This is scripts/check-settings-orphan-keys.sh with the arrow reversed, and it
 # guards the same class of defect from the other side. That script's header says
@@ -20,6 +21,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="$ROOT_DIR/config/krakend.tmpl"
 COMPOSE="$ROOT_DIR/docker-compose.yml"
+SETTINGS_DIR="$ROOT_DIR/config/settings"
 
 # Variables the template reads that compose deliberately does not pass, each
 # with the reason. Keep this empty if you can.
@@ -57,6 +59,47 @@ if (( ${#missing[@]} )); then
 fi
 
 echo "check-template-env: OK ($checked template variables, every one reachable from compose)"
+
+# The other direction. KEYCLOAK_ISSUER and KEYCLOAK_JWKS_URL sat in compose for
+# months with nothing reading them: the template interpolated jwt.json
+# literally, so pointing the gateway at another realm meant editing a versioned
+# file rather than setting a variable, and the two that looked like the way to
+# do it did nothing. Checking one direction only would have missed that.
+#
+# A variable counts as read when the template names it literally, or when it is
+# a backend host name, which the template reads as `env $e.host_env` with the
+# NAMES living in endpoints.json.
+RENDERER_OWN=("FC_ENABLE" "FC_SETTINGS" "FC_OUT" "FC_PARTIALS")
+
+read_by_template() {
+  local var="$1" own
+  for own in "${RENDERER_OWN[@]}"; do
+    [[ "$own" == "$var" ]] && return 0
+  done
+  grep -q "env \"$var\"" "$TEMPLATE" && return 0
+  grep -q "\"host_env\"[[:space:]]*:[[:space:]]*\"$var\"" "$SETTINGS_DIR"/*.json 2>/dev/null && return 0
+  return 1
+}
+
+orphans=()
+passed=0
+while IFS= read -r var; do
+  [[ -n "$var" ]] || continue
+  passed=$((passed + 1))
+  read_by_template "$var" || orphans+=("$var")
+done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Z_][A-Z0-9_]*)=.*/\1/p' "$COMPOSE" | sort -u)
+
+if (( ${#orphans[@]} )); then
+  echo "check-template-env: FAILED" >&2
+  echo "  docker-compose.yml passes these, and nothing reads them:" >&2
+  printf '    %s\n' "${orphans[@]}" >&2
+  echo "  A variable nobody reads is an override that looks like the way to" >&2
+  echo "  change something and is not. Wire it into config/krakend.tmpl, or" >&2
+  echo "  remove it from compose." >&2
+  exit 1
+fi
+
+echo "check-template-env: OK ($passed compose variables, every one read by something)"
 
 # A flag rendered from a conditional expression can emit the wrong JSON type,
 # and for roles_enforce that is a fail-OPEN: the field is *bool, a non-boolean

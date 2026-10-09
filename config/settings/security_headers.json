@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "@comment-frame_deny": "Measured 2026-10-09 against krakend:2.13.4: setting this false does NOT remove X-Frame-Options. The module answers DENY either way, so the flag is one-directional and framing cannot be allowed from here. scripts/smoke-security-headers.sh asserts the observed DENY.",
   "frame_deny": true,
   "content_security_policy": "frame-ancestors 'none'",
   "content_type_nosniff": true,
