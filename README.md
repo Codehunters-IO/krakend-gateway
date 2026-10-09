@@ -163,10 +163,11 @@ make build
 | `make plugin-check` | Verifica que plugins + config son validos |
 | `make plugins-test` | `go test` + `go vet` en los cinco modulos de plugins |
 | `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
+| `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
-| `make check` | `gen-check` + valida la configuracion KrakenD |
+| `make check` | `gen-check` + un solo `issuer` + valida la configuracion KrakenD |
 | `make generate` | Genera el `krakend.json` final desde templates |
 | `make clean` | Elimina artefactos generados |
 
@@ -271,17 +272,24 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
 `""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
 
-Cuatro capas de validacion en total:
+Cinco capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
-3. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-4. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+3. **`scripts/check-jwt-single-issuer.sh`** — exactamente un `issuer`, un
+   `jwks_url` del mismo realm, y nada de issuers hardcodeados en el template.
+4. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+5. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las cuatro corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las cinco corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3 y 4.
+por si solo **no** corre las capas 3, 4 y 5.
+
+La capa 3 corre **antes** del render a proposito: es jq puro sobre los ficheros
+de `config/settings/`, asi que sigue respondiendo en una maquina cuyo binario
+`krakend` se haya desviado del 2.13.4 pineado (un `brew upgrade` a 3.x rompe el
+render, que pide `version: 4`).
 
 ### Rutas publicas y `skip_paths`
 
