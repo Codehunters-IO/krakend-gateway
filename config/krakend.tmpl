@@ -120,8 +120,13 @@
       {{- end }}
       {{- if $jwtEnabled }}
       "krakend-jwt-headers": {
-        "jwks_url": "{{ .jwt.jwks_url }}",
-        "issuer": "{{ .jwt.issuer }}",
+        {{/* These two were the only values in this template that did not read
+             their environment, while docker-compose.yml exported KEYCLOAK_ISSUER
+             and KEYCLOAK_JWKS_URL for nobody to consume -- the mirror image of
+             what scripts/check-template-env.sh catches, and the reason one image
+             could not serve two realms. */}}
+        "jwks_url": "{{ env "KEYCLOAK_JWKS_URL" | default .jwt.jwks_url }}",
+        "issuer": "{{ env "KEYCLOAK_ISSUER" | default .jwt.issuer }}",
         "cache_ttl_minutes": {{ .jwt.cache_ttl_minutes }},
         "claims_to_headers": {{ marshal .jwt.claims_to_headers }},
         "skip_paths": [
