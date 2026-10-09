@@ -334,6 +334,7 @@ security regression, not a flaky test.
 |---|---|---|---|
 | `SESSION_ENABLED` | `krakend.tmpl` | `session.json`'s `enabled` (`true`) | Set to `false` to disable the plugin entirely — see **Rollback** below. |
 | `VALKEY_ADDR` | `session.json` → plugin | `valkey:6379` | Standalone Valkey only; the plugin forces a single-client connection, never cluster mode. |
+| `VALKEY_USERNAME` | `krakend.tmpl` → plugin | empty (legacy `AUTH`, i.e. the `default` user) | The Valkey ACL user the edge authenticates as. **Leaving it empty gives the gateway every permission on every key** — see *Least privilege on the store* below. |
 | `VALKEY_PASSWORD` | `session.json` → plugin, and the `valkey` compose service itself | none | **No real default anywhere.** The compose file's `devpassword` fallback is a development placeholder only — set a real value out of band in every other environment. |
 | `SESSION_COOKIE_NAME` | `session.json` → plugin | `sid` | Must be `__Host-sid` wherever TLS terminates at the edge (the `__Host-` prefix requires HTTPS, no `Domain`, `Path=/`); `sid` is the development-only name because `__Host-` cookies do not work over `http://localhost:8090`. |
 | `AUTH_BFF_REFRESH_URL` | `session.json` → plugin | `http://auth-bff:8086/internal/sessions/{sid}/refresh` | Must contain the literal `{sid}` placeholder or the gateway refuses to start. |
@@ -342,6 +343,47 @@ security regression, not a flaky test.
 | `CORS_ALLOW_ORIGINS` | `krakend.tmpl` → `security/cors` | `cors.json`'s `allow_origins` (`http://localhost:5173`) | Comma-separated. Not read by the plugin, but a browser cannot send the cookie at all unless the origin is allowed here *and* `allow_credentials` is true. Keep it consistent with `SESSION_ALLOWED_ORIGINS`. |
 | `AUTH_BFF_HOST` | `hosts.json` → the `/auth/*` route backends | `http://host.docker.internal:8086` | Where the gateway proxies the public OIDC routes. Not read by the plugin itself — the plugin talks to `auth-bff`'s `/internal` endpoint directly via `AUTH_BFF_REFRESH_URL`, never through the gateway's own routing. |
 | `KEYCLOAK_ISSUER` / `KEYCLOAK_JWKS_URL` | `jwt.json` (`jwt-headers` plugin) | `http://localhost:8083/realms/forgeos` / `http://host.docker.internal:8083/...` | Not consumed by `session-resolver` itself, but the bearer it injects is only as good as `jwt-headers`'s ability to validate it against these. **`config/krakend.tmpl` does not currently read these two env vars** — `jwt-headers`'s `jwks_url`/`issuer` are rendered straight from `config/settings/jwt.json`, unlike every other secret/URL in this file. Pointing at a different Keycloak (a different port, a different realm) means editing `jwt.json` directly, not exporting the env var, until that gap is closed. |
+
+## Least privilege on the store
+
+The plugin issues exactly four commands, all in `session.go`:
+
+```
+HMGET  v1:session:{sid} access_token sub exp abs_exp
+TTL    v1:session:{sid}
+EXPIRE v1:session:{sid} <idle ttl>
+DEL    v1:session:{sid}
+```
+
+Nothing else, ever, and only under its own key prefix. With `VALKEY_USERNAME`
+unset the plugin authenticates with a bare password, which means the `default`
+user: read and write on every key in the store, including every other user's
+session and `FLUSHALL`. The design's claim that a compromised edge yields
+short-lived access tokens and not the store depends on that not being the case.
+
+Create a user that can do those four things and nothing more:
+
+```
+ACL SETUSER gateway on >$VALKEY_PASSWORD ~v1:session:* +hmget +ttl +expire +del +@connection
+```
+
+Then set `VALKEY_USERNAME=gateway`.
+
+`+@connection` is not optional and was found by test, not by reading: valkey-go
+opens with `HELLO` and turns on client-side caching with `CLIENT TRACKING`, so
+a user without that category never gets a usable connection and every request
+answers `503`. It fails closed, but for a reason that reads like a store
+outage.
+
+Two traps worth knowing:
+
+- **`default` ships as `nopass`, and a `nopass` user accepts any password.** So
+  a misconfigured `VALKEY_USERNAME` does not fail — it silently succeeds as
+  `default` with full permissions. Turn `default` off, or an ACL is decorative.
+  `plugins/session-resolver/acl_test.go` only proves anything because it does
+  exactly that; without it the test passes even when the username is ignored.
+- A wrong password with a real ACL user fails closed with `503`, not with a
+  fallback to an anonymous connection. There is a test for that too.
 
 ## The published image renders its config at run time
 
