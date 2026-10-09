@@ -9,6 +9,9 @@ para cambiar una decisión, escribir uno nuevo con `supersedes: NNNN`.
 
 ## Índice
 
+Los números 0006 (autorización por app en el edge) y 0007 (un gateway por realm) están
+reservados: hay referencias a ellos en el plan y en los scripts antes de que existan.
+
 La columna **Fecha** es la de redacción (`date` en el frontmatter), no la de aceptación.
 Para ADR-0001 hay tres meses entre las dos: escrito el 2026-06-26, aceptado el 2026-09-25.
 
@@ -19,3 +22,4 @@ Para ADR-0001 hay tres meses entre las dos: escrito el 2026-06-26, aceptado el 2
 | [0003](0003-session-state-at-the-edge.md) | Estado de sesión en el edge — cookie opaca resuelta contra Valkey | 2026-10-05 | accepted |
 | [0004](0004-plugin-chain-order.md) | Array `plugin/http-server` invertido, y los dos plugins de auth juntos | 2026-10-06 | accepted |
 | [0005](0005-one-platform-realm-and-master-as-operator-realm.md) | Un realm de aplicaciones (`codehunters`) y `master` como realm de operadores | 2026-10-07 | proposed |
+| [0008](0008-the-edge-keeps-its-own-jwt-plugin.md) | El edge se queda con su propio plugin JWT, no con el validador declarativo | 2026-10-09 | accepted |
