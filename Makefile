@@ -50,14 +50,14 @@ check: gen-check ## Validate KrakenD configuration (regen + drift + config guard
 	@./scripts/check-settings-orphan-keys.sh
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
-	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
+	./scripts/krakend-check.sh "$(CONFIG_DIR)/krakend.tmpl"
 	@./scripts/check-plugin-chain-order.sh
 
 generate: ## Generate the final krakend.json from templates
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
 	FC_OUT="$(OUTPUT_FILE)" \
-	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
+	./scripts/krakend-check.sh "$(CONFIG_DIR)/krakend.tmpl"
 	@echo "Generated $(OUTPUT_FILE) with ENV=$(ENV)"
 
 run: ## Run KrakenD locally with flexible configuration
