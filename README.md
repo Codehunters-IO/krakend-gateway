@@ -85,7 +85,7 @@ Resolucion: el generador escribe `host_env`/`host_default` en `endpoints.json` y
 template resuelve `{{ env $host_env | default $host_default }}` por endpoint — si la
 envvar esta seteada, gana. Compose ya las propaga con esos mismos defaults.
 Ya no existe `config/settings/hosts.json`: conservaba un solo default de `forgeos` que
-ningun camino del template leia.
+ningun camino del template leia, y `scripts/check-settings-orphan-keys.sh` lo saco.
 
 `session-resolver` habla con `auth-bff` por su cuenta, no a traves del gateway; su URL
 se controla aparte con `AUTH_BFF_REFRESH_URL`.
@@ -164,10 +164,11 @@ make build
 | `make plugins-test` | `go test` + `go vet` en los cinco modulos de plugins |
 | `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
+| `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
-| `make check` | `gen-check` + un solo `issuer` + valida la configuracion KrakenD |
+| `make check` | `gen-check` + guardias de configuracion + valida la configuracion KrakenD |
 | `make generate` | Genera el `krakend.json` final desde templates |
 | `make clean` | Elimina artefactos generados |
 
@@ -272,21 +273,23 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
 `""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
 
-Cinco capas de validacion en total:
+Seis capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
 3. **`scripts/check-jwt-single-issuer.sh`** — exactamente un `issuer`, un
    `jwks_url` del mismo realm, y nada de issuers hardcodeados en el template.
-4. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-5. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+4. **`scripts/check-settings-orphan-keys.sh`** — ninguna clave de `settings/` que el
+   template no lea.
+5. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+6. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las cinco corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las seis corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3, 4 y 5.
+por si solo **no** corre las capas 3 a 6.
 
-La capa 3 corre **antes** del render a proposito: es jq puro sobre los ficheros
+Las capas 3 y 4 corren **antes** del render a proposito: son jq y python puros sobre los ficheros
 de `config/settings/`, asi que sigue respondiendo en una maquina cuyo binario
 `krakend` se haya desviado del 2.13.4 pineado (un `brew upgrade` a 3.x rompe el
 render, que pide `version: 4`).
@@ -756,9 +759,10 @@ servicio.
 
 > `rate_limit.json` declaraba ademas `endpoint_max_rate: 100` y
 > `endpoint_client_max_rate: 20`. **Ningun camino del template los leia**: eran config
-> muerta documentada aqui como limite vigente. Se borraron. No hay forma de fijar un
-> default por endpoint desde ese fichero — el limite se declara endpoint por endpoint,
-> arriba.
+> muerta documentada aqui como limite vigente. Se borraron, y
+> `scripts/check-settings-orphan-keys.sh` falla el build si vuelve a aparecer una clave que
+> nada lee. No hay forma de fijar un default por endpoint desde ese fichero — el limite se
+> declara endpoint por endpoint, arriba.
 
 ### JWT / Keycloak
 

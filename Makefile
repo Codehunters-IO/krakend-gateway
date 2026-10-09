@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -45,8 +45,9 @@ gen-check: ## Fail if endpoints.json is out of sync with endpoints.yaml (refuses
 	@$(MAKE) --no-print-directory gen
 	@git diff --exit-code $(ENDPOINTS_JSON)
 
-check: gen-check ## Validate KrakenD configuration (regen + drift + schema + issuer)
+check: gen-check ## Validate KrakenD configuration (regen + drift + config guards + schema)
 	@./scripts/check-jwt-single-issuer.sh
+	@./scripts/check-settings-orphan-keys.sh
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
 	krakend check -d -t -c "$(CONFIG_DIR)/krakend.tmpl"
@@ -107,6 +108,9 @@ plugins-abi: ## Fail if the plugin builder's Go version drifts from the KrakenD 
 
 jwt-issuer: ## Fail if the edge declares anything other than exactly one issuer
 	./scripts/check-jwt-single-issuer.sh
+
+settings-check: ## Fail if config/settings declares a key the template never reads
+	./scripts/check-settings-orphan-keys.sh
 
 dev: plugin-build up ## Build plugins and start locally (full local dev)
 
