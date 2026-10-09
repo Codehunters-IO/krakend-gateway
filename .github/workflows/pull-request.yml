@@ -92,6 +92,27 @@ jobs:
       - name: Check the plugin ABI pins agree
         run: make plugins-abi
 
+  # ADR-0001 was accepted in June with its confirmation unapplied: it asks for
+  # the three security headers to be checked on a real response, and `make
+  # check` only proves the template renders a security/http block. Rendering is
+  # not applying, and the two are different claims. This job answers the second
+  # one off the socket. It needs no plugin build -- every plugin flag is off --
+  # so it does not depend on krakend/builder, only on the pinned runtime image.
+  smoke-headers:
+    name: Security headers smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate the development certificate
+        run: make tls-dev-cert
+
+      - name: Pull the pinned runtime image
+        run: docker pull -q krakend:2.13.4
+
+      - name: Assert the headers on a real response
+        run: make smoke-headers
+
   # ci-templates has no Go workflow — its stacks are java, contracts, krakend,
   # nginx and react — and the krakend ones only build the image and audit the
   # configuration. So the plugins' own tests ran nowhere: 34 of them when this

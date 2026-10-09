@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check smoke-headers up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -115,6 +115,9 @@ settings-check: ## Fail if config/settings declares a key the template never rea
 
 template-env-check: ## Fail if the template reads an env var compose never passes
 	./scripts/check-template-env.sh
+
+smoke-headers: ## ADR-0001's confirmation: the security headers off a real socket
+	./scripts/smoke-security-headers.sh
 
 dev: plugin-build up ## Build plugins and start locally (full local dev)
 
