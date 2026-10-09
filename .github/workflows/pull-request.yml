@@ -94,9 +94,10 @@ jobs:
 
   # ci-templates has no Go workflow — its stacks are java, contracts, krakend,
   # nginx and react — and the krakend ones only build the image and audit the
-  # configuration. So the plugins' own tests ran nowhere: 34 of them, including
-  # the 32 that cover session-resolver's fail-closed behaviour, existed without
-  # a gate. ADR-0003 names this job as a condition for its own acceptance.
+  # configuration. So the plugins' own tests ran nowhere: 34 of them when this
+  # job was added — 98 today — including the 32 that cover session-resolver's
+  # fail-closed behaviour, all without a gate. ADR-0003 names this job as a
+  # condition for its own acceptance.
   plugins:
     name: Plugin tests
     runs-on: ubuntu-latest

@@ -375,6 +375,24 @@ ve una cookie `HttpOnly`, nunca el JWT. Orden de cadena, los cuatro flujos
 Valkey y el runbook completo estan en
 [`docs/session-flow.md`](docs/session-flow.md).
 
+### Cobertura de tests
+
+Los cinco modulos tienen tests, y corren en CI (`make plugins-test`, job
+`Plugin tests` de cada PR):
+
+| Plugin | Funciones `Test*` | Que cubren |
+|--------|------------------:|------------|
+| `session-resolver` | 32 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp` |
+| `gateway-timeout` | 24 | `500` vacio y lento → `504`; body o rapidez lo impiden; `503` intacto; Flush retenido |
+| `trace-context` | 16 | Propagacion, fallback de `Trace-Id`, generacion, 18 formas malformadas |
+| `jwt-headers` | 13 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos |
+| `accept-language` | 13 | Default solo cuando falta, nunca pisa al cliente |
+
+Cada suite se valido con **mutation testing**: se rompe el plugin a proposito y se
+comprueba que algun test falla. Un test que pasa con el codigo roto no cubre nada, y
+eso ya paso aqui — los primeros tests de confusion de algoritmo de `jwt-headers`
+pasaban con `WithValidMethods` quitado.
+
 ### Habilitar / Deshabilitar plugins
 
 Cada plugin tiene un campo `enabled` en su fichero de settings:
