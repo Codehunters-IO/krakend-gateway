@@ -142,6 +142,13 @@ sin claim de organización.
   —no de `master`— recibe 403 aunque el usuario tenga roles de administrador en su propio realm.
 - **Aserción de configuración en CI**: `config/settings/jwt.json` declara exactamente un `issuer`, y
   su realm es el de plataforma. Falla el build si aparece un segundo.
+  **Mitad implementada el 2026-10-09**: `scripts/check-jwt-single-issuer.sh`, dentro de
+  `make check` y por tanto en cada pull request, exige exactamente un `issuer` y un `jwks_url` en
+  todo `config/settings/`, que ambos nombren el mismo realm, y que el template no hardcodee
+  ninguno de los dos —lo que los pondría fuera del alcance del guardia—. La otra mitad, que ese
+  realm **sea** el de plataforma, está escrita y apagada: se enciende exportando
+  `JWT_PLATFORM_REALM`, y hoy fallaría, porque la configuración viva sigue apuntando a
+  `.../realms/forgeos`. Encenderla corresponde al cambio que mueva el realm, no a este ADR.
 - **Gate de despliegue**: la lista de clientes del realm `codehunters` incluye `forgeos-web`, y el
   realm `forgeos` no existe. Verificable contra la Admin API.
 - **Aserción sobre `impersonation`**: ningún usuario ni grupo de `master` tiene ese rol del cliente
