@@ -24,7 +24,8 @@
         "max_rate": 20,
         "client_max_rate": 5,
         "strategy": "ip"
-      }
+      },
+      "roles": null
     },
     {
       "path": "/auth/callback",
@@ -57,7 +58,8 @@
         "max_rate": 20,
         "client_max_rate": 5,
         "strategy": "ip"
-      }
+      },
+      "roles": null
     },
     {
       "path": "/auth/session",
@@ -79,7 +81,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/auth/logout",
@@ -101,7 +104,8 @@
       ],
       "input_query_strings": [],
       "timeout": "10s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/auth/backchannel-logout",
@@ -122,7 +126,8 @@
       ],
       "input_query_strings": [],
       "timeout": "10s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/ping",
@@ -142,7 +147,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/organizations",
@@ -172,7 +178,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/organizations",
@@ -202,7 +209,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/organizations/{orgId}/members",
@@ -232,7 +240,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects",
@@ -262,7 +271,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects",
@@ -292,7 +302,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/hub",
@@ -322,7 +333,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/summary",
@@ -352,7 +364,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/description",
@@ -382,7 +395,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/stories",
@@ -412,7 +426,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/stories",
@@ -442,7 +457,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/board",
@@ -472,7 +488,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/refinement/turns",
@@ -502,7 +519,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/refinement/turns",
@@ -532,7 +550,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/stories/{id}",
@@ -562,7 +581,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/projects/{projectId}/refinement/stream",
@@ -592,7 +612,8 @@
       ],
       "input_query_strings": [],
       "timeout": "3600s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/stories/{id}/refinement/stream",
@@ -622,7 +643,8 @@
       ],
       "input_query_strings": [],
       "timeout": "3600s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/agent-runs/{id}/stream",
@@ -652,7 +674,8 @@
       ],
       "input_query_strings": [],
       "timeout": "3600s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/mcp",
@@ -683,7 +706,8 @@
       ],
       "input_query_strings": [],
       "timeout": "120s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/mcp",
@@ -714,7 +738,8 @@
       ],
       "input_query_strings": [],
       "timeout": "3600s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/mcp",
@@ -745,7 +770,8 @@
       ],
       "input_query_strings": [],
       "timeout": "30s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/v1/search",
@@ -775,7 +801,8 @@
       ],
       "input_query_strings": [],
       "timeout": "60s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/v1/documents",
@@ -805,7 +832,8 @@
       ],
       "input_query_strings": [],
       "timeout": "300s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/v1/memories",
@@ -835,7 +863,8 @@
       ],
       "input_query_strings": [],
       "timeout": "60s",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/v1/collections",
@@ -865,7 +894,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     },
     {
       "path": "/api/v1/projects",
@@ -895,7 +925,8 @@
       ],
       "input_query_strings": [],
       "timeout": "",
-      "rate_limit": null
+      "rate_limit": null,
+      "roles": null
     }
   ]
 }

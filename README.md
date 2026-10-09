@@ -165,6 +165,7 @@ make build
 | `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
+| `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
 | `make gen PRODUCTS=a,b` | Regenera cargando solo esos productos |
 | `make gen-check` | Falla si `endpoints.json` esta desincronizado con `endpoints.yaml` |
@@ -273,7 +274,7 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
 `""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
 
-Seis capas de validacion en total:
+Siete capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
@@ -281,13 +282,15 @@ Seis capas de validacion en total:
    `jwks_url` del mismo realm, y nada de issuers hardcodeados en el template.
 4. **`scripts/check-settings-orphan-keys.sh`** — ninguna clave de `settings/` que el
    template no lea.
-5. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-6. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+5. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
+   no pase, y los flags booleanos renderizan booleanos.
+6. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+7. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las seis corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las siete corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3 a 6.
+por si solo **no** corre las capas 3 a 7.
 
 Las capas 3 y 4 corren **antes** del render a proposito: son jq y python puros sobre los
 ficheros de `config/settings/`, asi que responden incluso si el render no puede correr.

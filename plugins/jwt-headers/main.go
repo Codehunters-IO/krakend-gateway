@@ -40,10 +40,21 @@ type claimMapping struct {
 	Header string `json:"header"`
 }
 
-// roleRule requires the caller to hold at least one of Roles to reach a path.
-// Path segments support a single-segment wildcard: "/raffles/*/tickets/reserve".
+// roleRule gates a path glob on a claim. Claim is a dot-notation path and
+// empty inherits cfg.RolesClaim; it exists so a rule can read client roles
+// (resource_access.<client>.roles) rather than realm roles, which are global
+// by construction and say nothing about which application the holder may enter.
+//
+// Path takes a wildcard that matches EXACTLY ONE segment, which is not what
+// "*" means in skip_paths: compilePattern turns a trailing /* into (/.*)?,
+// spanning any number of segments. Both lists are derived from the same
+// path-to-glob transformation in config/krakend.tmpl, so the same string means
+// different things on either side. A rule of "/api/*" therefore gates
+// /api/projects and NOT /api/projects/P-1/stories — it is not a blanket gate
+// for a surface, however much it reads like one.
 type roleRule struct {
 	Path  string   `json:"path"`
+	Claim string   `json:"claim"`
 	Roles []string `json:"roles"`
 }
 
@@ -56,8 +67,13 @@ type pluginConfig struct {
 	RequiredClaims  []string       `json:"required_claims"`
 	RolesClaim      string         `json:"roles_claim"`
 	RequiredRoles   []roleRule     `json:"required_roles"`
-	AddIPHeader     bool           `json:"add_ip_header"`
-	IPHeaderName    string         `json:"ip_header_name"`
+	// RolesEnforce nil or true enforces. Only an explicit false observes:
+	// the gate logs what it would have denied and admits the request, which is
+	// how a deployment discovers missing role assignments from live traffic
+	// instead of from an inventory someone assembled by hand.
+	RolesEnforce *bool  `json:"roles_enforce"`
+	AddIPHeader  bool   `json:"add_ip_header"`
+	IPHeaderName string `json:"ip_header_name"`
 	// Introspection (RFC 7662): when enabled, each validated token is checked
 	// against Keycloak's introspection endpoint so revoked/logged-out sessions
 	// are rejected immediately, not just at token expiry.
@@ -291,10 +307,24 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 		}
 
 		// Enforce per-endpoint role requirements (RBAC at the edge).
-		if !hasRequiredRole(cfg, claims, req.URL.Path) {
-			logger.Warn("forbidden: missing required role", "path", req.URL.Path)
-			deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
-			return
+		if d := evaluateRoles(cfg, claims, req.URL.Path); d.matched && !d.allowed {
+			observing := cfg.RolesEnforce != nil && !*cfg.RolesEnforce
+			// Both branches log the same fields. An enforced 403 that says only
+			// "missing required role" cannot be diagnosed from logs: which of
+			// several matching rules denied, and what the token actually held,
+			// are the two things the operator needs.
+			for _, f := range d.failed {
+				msg := "forbidden: missing required role"
+				if observing {
+					msg = "role check would deny"
+				}
+				logger.Warn(msg, "path", req.URL.Path, "claim", f.claim,
+					"required", f.required, "token_roles", f.tokenRoles, "enforced", !observing)
+			}
+			if !observing {
+				deny(w, http.StatusForbidden, `{"message":"forbidden: missing required role"}`)
+				return
+			}
 		}
 
 		// Extract claims and set headers
@@ -380,24 +410,58 @@ func matchesAny(path string, regexes []*regexp.Regexp) bool {
 	return false
 }
 
-// hasRequiredRole returns true if the path has no role rule, or the caller holds
-// at least one required role. Roles are read from cfg.RolesClaim (dot notation).
-func hasRequiredRole(cfg *pluginConfig, claims jwt.MapClaims, path string) bool {
-	var required []string
-	matched := false
-	for _, rule := range cfg.RequiredRoles {
-		if matchGlob(rule.Path, path) {
-			matched = true
-			required = append(required, rule.Roles...)
+// failedRule is one matching rule the token did not satisfy. Every one of them
+// is reported: the rollout reads these lines to find missing role assignments,
+// and reporting an arbitrary one sends the operator to grant a role on a client
+// the route has nothing to do with — which does unblock the route, because the
+// union is any-of, and leaves the rule the route exists for unsatisfied.
+type failedRule struct {
+	claim      string
+	required   []string
+	tokenRoles []string
+}
+
+// roleDecision is what the gate concluded, kept separate from acting on it so
+// observation mode can log a denial it is not going to apply.
+type roleDecision struct {
+	matched bool
+	allowed bool
+	failed  []failedRule
+}
+
+// evaluateRoles returns allowed=true when no rule matches the path -- the
+// permissive default is deliberate, and completeness is enforced by
+// scripts/check-endpoint-authorization.sh at build time rather than by a
+// runtime deny that would turn an incomplete rule list into an outage.
+func evaluateRoles(cfg *pluginConfig, claims jwt.MapClaims, path string) roleDecision {
+	d := roleDecision{allowed: true}
+	for _, r := range cfg.RequiredRoles {
+		if !matchGlob(r.Path, path) {
+			continue
 		}
+		d.matched = true
+		claim := r.Claim
+		if claim == "" {
+			claim = cfg.RolesClaim
+		}
+		held := extractStringSlice(claims, claim)
+		if holdsAny(held, r.Roles) {
+			return roleDecision{matched: true, allowed: true}
+		}
+		d.failed = append(d.failed, failedRule{claim: claim, required: r.Roles, tokenRoles: held})
 	}
-	if !matched {
-		return true
+	if !d.matched {
+		return roleDecision{allowed: true}
 	}
-	userRoles := extractStringSlice(claims, cfg.RolesClaim)
-	for _, ur := range userRoles {
-		for _, rr := range required {
-			if ur == rr {
+	d.allowed = false
+	return d
+}
+
+// holdsAny names the any-of semantics the gate applies within one rule.
+func holdsAny(held, want []string) bool {
+	for _, h := range held {
+		for _, w := range want {
+			if h == w {
 				return true
 			}
 		}
