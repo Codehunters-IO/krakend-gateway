@@ -71,6 +71,21 @@ la otra: Valkey entra como dominio de fallo compartido para el tráfico con cook
 cerrado en `503`. El gateway queda stateless como proceso y dependiente como sistema, igual que
 ya lo era respecto al JWKS, con las dos diferencias de frecuencia y naturaleza dichas arriba.
 
+**El argumento que decide entre esta opción y las dos del BFF es la dirección de la
+dependencia.** Valkey es infraestructura; `auth-bff` es una aplicación que vive **detrás** de
+este gateway y que él mismo enruta (`/auth/*`). Que el borde dependa de infraestructura es la
+disposición normal. Que el borde se vuelva cliente de un servicio al que frontea invierte la
+capa: el gateway necesitaría a `auth-bff` para decidir si deja pasar peticiones hacia los
+backends, siendo `auth-bff` uno de ellos. A eso se añade el acoplamiento de ciclo de vida —cada
+despliegue de `auth-bff` pasaría a ser un evento de disponibilidad del borde— y que ninguna de
+las dos saca a Valkey del camino crítico: le pone `auth-bff` delante, dejando dos dominios de
+fallo en serie donde hoy hay uno.
+
+Esta decisión tampoco es original: resolver una credencial opaca contra un almacén en el borde
+es la forma de la introspección de token (RFC 7662) sin el salto al endpoint, y es como
+resuelven la sesión oauth2-proxy, el plugin de sesión de Kong y los `ext_authz` de Envoy con
+caché.
+
 Tres propiedades del diseño acotan el coste de esa cesión, y son las que hacen aceptable la
 opción:
 
@@ -119,6 +134,17 @@ revocar antes de su expiración, así que el backchannel logout deja de tener ef
 - **Bad** — Desvía de la lectura literal de la guía de plataforma, lo que obliga a este ADR.
   Quien lea la guía y luego el plugin encontrará la misma contradicción aparente; este documento
   es dónde se resuelve.
+- **Bad** — **Integración por almacén compartido.** Es el coste arquitectónico real de esta
+  opción, y conviene nombrarlo en sus términos: dos servicios quedan acoplados por un esquema
+  —`v1:session:{sid}` con `access_token`, `exp`, `abs_exp`, `sub`— que escribe un servicio JVM y
+  lee un plugin en Go, así que cambiarlo exige dos despliegues coordinados en dos lenguajes y dos
+  repositorios. Tres cosas lo acotan sin eliminarlo: el prefijo `v1:` lo convierte en contrato
+  versionado y no en acoplamiento implícito; el plugin lee solo los cuatro campos no secretos y
+  nunca `refresh_token_enc` ni `id_token_enc`, que viven en la misma clave
+  (`TestStoreLoadRequestsOnlyNonSecretFields`); y nunca escribe esos campos, solo `EXPIRE` y
+  `DEL`. **Si el contrato de sesión empieza a crecer o a cambiar a menudo, este coste pasa a ser
+  el dominante y la decisión hay que revisarla** — un endpoint de introspección con caché corta,
+  cediendo revocación inmediata, o la opción 2.
 - **Neutral** — Un reinicio de Valkey desloguea a todos; es transparente mientras viva la sesión
   SSO de Keycloak.
 - **Neutral** — Tres relojes independientes que hay que mantener alineados: `exp` como campo que
@@ -173,6 +199,25 @@ en cada pull request, que recorre los cinco módulos de `PLUGINS` —`session-re
 ellos—, corre `go test ./...` y `go vet ./...` en cada uno, y termina con código distinto de cero
 si alguno falla. Verificado el 2026-10-09: 32 funciones `Test*` en `plugins/session-resolver/`,
 suite en verde. **La primera de las dos condiciones de aceptación está cumplida.**
+
+**Mínimo privilegio sobre el almacén, cerrado el 2026-10-09.** La afirmación de que un borde
+comprometido entrega access tokens de vida corta y no el almacén dependía de un privilegio que la
+implementación no podía expresar: el plugin solo aceptaba `valkey_password`, es decir el usuario
+`default` de Valkey, con permiso de lectura y escritura sobre cualquier clave y `FLUSHALL`
+incluido. Ahora acepta `valkey_username` (`VALKEY_USERNAME`), y la ACL que basta para los cuatro
+comandos que emite está documentada en
+[Least privilege on the store](../session-flow.md#least-privilege-on-the-store). Cubierto por
+`plugins/session-resolver/acl_test.go`: el plugin resuelve una sesión como usuario restringido,
+ese mismo usuario recibe `NOPERM` en seis operaciones fuera de su prefijo, una credencial
+equivocada falla cerrada en `503`, y el caso sin usuario sigue funcionando para no romper lo
+desplegado.
+
+Una trampa que ese test tuvo que aprender a la fuerza y queda registrada aquí porque invalida
+cualquier ACL puesta a medias: **el usuario `default` de Valkey viene con `nopass`, y un usuario
+`nopass` acepta cualquier contraseña.** Un `VALKEY_USERNAME` mal configurado por tanto no falla
+—entra como `default` con todos los permisos—, y un test que solo compruebe el camino feliz pasa
+igual cuando el usuario se ignora. Mutation testing lo demostró: quitar la línea que pasa el
+usuario al cliente no rompía nada hasta que el test apagó `default`.
 
 **Pendiente además:**
 
