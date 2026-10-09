@@ -1,7 +1,6 @@
 {
+  "@comment": "Service-wide limits only. Per-endpoint limits are declared per endpoint in endpoints.yaml (rate_limit:), which the generator renders into qos/ratelimit/router — no template path reads an endpoint_* default from this file, so adding one here protects nothing. scripts/check-settings-orphan-keys.sh fails the build on a key this file declares and config/krakend.tmpl never reads.",
   "service_max_rate": 500,
   "service_client_max_rate": 50,
-  "endpoint_max_rate": 100,
-  "endpoint_client_max_rate": 20,
   "strategy": "ip"
 }
