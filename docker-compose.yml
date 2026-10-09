@@ -75,6 +75,16 @@ services:
       # Unreachable from here, the observation step of that rollout silently
       # enforces and takes both product surfaces down.
       - JWT_ROLES_ENFORCE=${JWT_ROLES_ENFORCE:-}
+    # KrakenD serves /__health itself, and the plugins wrap the whole server, so
+    # a probe only gets a 200 because /__health is in both plugins' skip_paths.
+    # The image has no curl; wget comes from busybox. --no-check-certificate
+    # because TLS is on with a self-signed development certificate.
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost:8090/__health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
     labels:
       observability.service: "forgeos-gw-krakend"
       observability.environment: "develop"
