@@ -166,6 +166,7 @@ make build
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
 | `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
+| `make authz-check` | Falla si dos reglas de roles se solapan, donde el plugin las uniria |
 | `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
 | `make plugins-loaded` | Falla si el gateway en marcha no registro los cinco plugins |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
@@ -276,7 +277,7 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
 `""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
 
-Siete capas de validacion en total:
+Ocho capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
@@ -284,20 +285,22 @@ Siete capas de validacion en total:
    `jwks_url` del mismo realm, y nada de issuers hardcodeados en el template.
 4. **`scripts/check-settings-orphan-keys.sh`** — ninguna clave de `settings/` que el
    template no lea.
-5. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
+5. **`scripts/check-endpoint-authorization.sh`** — ningun par de reglas de roles que se
+   solapen, porque el plugin las une y `any_of` deja ganar a la mas permisiva.
+6. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
    no pase, y los flags booleanos renderizan booleanos.
-6. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-7. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+7. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+8. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las siete corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las ocho corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3 a 7.
+por si solo **no** corre las capas 3 a 8.
 
-Las capas 3 y 4 corren **antes** del render a proposito: son jq y python puros sobre los
+Las capas 3, 4 y 5 corren **antes** del render a proposito: son jq y python puros sobre los
 ficheros de `config/settings/`, asi que responden incluso si el render no puede correr.
 
-### Que version de `krakend` usan las capas 5 y 6
+### Que version de `krakend` usan las capas 6 y 7
 
 La que esta pineada, no la que tengas instalada. `scripts/krakend-check.sh` usa el binario
 local si su version coincide con `KRAKEND_IMAGE` del `Makefile`, y si no, corre esa imagen
