@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check authz-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -48,6 +48,7 @@ gen-check: ## Fail if endpoints.json is out of sync with endpoints.yaml (refuses
 check: gen-check ## Validate KrakenD configuration (regen + drift + config guards + schema)
 	@./scripts/check-jwt-single-issuer.sh
 	@./scripts/check-settings-orphan-keys.sh
+	@./scripts/check-endpoint-authorization.sh
 	@./scripts/check-template-env.sh
 	@FC_ENABLE=1 \
 	FC_SETTINGS="$(SETTINGS_DIR)" \
@@ -115,6 +116,9 @@ settings-check: ## Fail if config/settings declares a key the template never rea
 
 template-env-check: ## Fail if the template reads an env var compose never passes
 	./scripts/check-template-env.sh
+
+authz-check: ## Fail if two role rules overlap, where the plugin would union them
+	./scripts/check-endpoint-authorization.sh
 
 smoke-headers: ## ADR-0001's confirmation: the security headers off a real socket
 	./scripts/smoke-security-headers.sh
