@@ -197,7 +197,8 @@ for variant in "/api//projects" "/API/projects" "/api/projects/" "/api/projects/
   else
     echo "  FAILED $variant -> $code, want 301. The router now serves an uncleaned" >&2
     echo "         path as the matched route, which makes the role gate's" >&2
-    echo "         segment-by-segment globs bypassable. See ADR-0006." >&2
+    echo "         segment-by-segment globs bypassable. See" >&2
+    echo "         scripts/check-endpoint-authorization.sh." >&2
     fail=1
   fi
 done
