@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-09
+accepted-date: 2026-10-11
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos, auth-bff]
@@ -124,9 +125,12 @@ filtrar.
 
 ## Confirmation
 
-Esta decisión no está implementada y no hace falta todavía: ADR-0005 establece
-`codehunters` como el único realm de aplicaciones, así que hoy no hay un segundo realm que
-desplegar. Lo que sí está es el prerrequisito, y tiene guardia:
+**La decisión queda adoptada: el edge no valida varios issuers.** Un segundo realm se sirve con
+un segundo proceso, configurado cuando se necesite. Lo que se acepta es la topología, no un
+despliegue: hoy ADR-0005 hace de `codehunters` el único realm de aplicaciones, así que no hay
+un segundo realm que desplegar, y no se construye mecanismo para uno que no existe.
+
+El prerrequisito sí está, y con guardia:
 
 - **`scripts/check-template-env.sh`**, en `make check`: falla si el template lee una variable
   que compose no pasa, o si compose pasa una que nada lee. Es lo que impide que `issuer` y
@@ -135,12 +139,17 @@ desplegar. Lo que sí está es el prerrequisito, y tiene guardia:
   un `jwks_url` del mismo realm. Un gateway por realm es precisamente lo que permite que ese
   guardia siga siendo correcto en vez de tener que aflojarlo.
 
-Cuando exista el segundo despliegue, estas condiciones se añaden antes de pasar a `accepted`:
+Lo que esta decisión obliga a comprobar **en el momento en que se configure el segundo
+despliegue**, no antes:
 
-1. Un test que compruebe que cada despliegue rechaza con `401` un token del otro realm.
-2. Una aserción de que cada despliegue tiene su propio usuario ACL de Valkey y su propio
-   prefijo de clave.
-3. La decisión de subconjunto de rutas, tomada y registrada.
+1. Que cada despliegue rechaza con `401` un token del otro realm.
+2. Que cada despliegue tiene su propio usuario ACL de Valkey y su propio prefijo de clave.
+3. La decisión de subconjunto de rutas, tomada y registrada — con el riesgo ya escrito arriba:
+   dos gateways desde la misma imagen exponen las 31 rutas y solo difieren en el issuer.
+
+Que esas tres estén por comprobar no mantiene la decisión en propuesta. La alternativa —un
+edge multi-issuer— está descartada por los seis problemas medidos de arriba, y descartarla es
+lo que aquí se decide.
 
 ## More Information
 
