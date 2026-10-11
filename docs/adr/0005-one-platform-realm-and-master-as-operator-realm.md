@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-07
+accepted-date: 2026-10-11
 decision-makers: [Carlos Andres Montoya Tobon]
 consulted: [equipo plataforma, seguridad]
 informed: [equipo frontend, equipo forgeos, auth-bff]
@@ -136,23 +137,37 @@ sin claim de organización.
 
 ## Confirmation
 
+**La decisión queda adoptada: un realm de aplicaciones, `master` para operadores.** Lo que
+sigue siendo trabajo de configuración, hecho cuando se necesite, es la mudanza del realm en
+Keycloak. Conviene no confundir las dos cosas: esta decisión retira ADR-0002 —el
+realm-por-producto— y eso ya está en efecto en todo lo que se escribe desde ella. ADR-0003 se
+apoya en ella, y `scripts/check-jwt-single-issuer.sh` la guarda en cada pull request.
+
+**Estado real de la configuración, medido el 2026-10-09:** `config/settings/jwt.json` apunta
+todavía a `.../realms/forgeos`. El cliente `forgeos-web` vive en el realm `forgeos`, y
+`shell-web` en `codehunters`. Aceptar la decisión no es afirmar que esté aplicada.
+
+Lo que ya corre:
+
+- **Aserción de configuración en CI**: `scripts/check-jwt-single-issuer.sh`, dentro de
+  `make check` y por tanto en cada pull request, exige exactamente un `issuer` y un `jwks_url`
+  en todo `config/settings/`, que ambos nombren el mismo realm, y que el template no hardcodee
+  ninguno de los dos —lo que los pondría fuera del alcance del guardia—. La otra mitad, que ese
+  realm **sea** el de plataforma, está escrita y apagada: se enciende exportando
+  `JWT_PLATFORM_REALM`, y hoy fallaría. Encenderla es el último paso de la mudanza.
+
+Lo que esta decisión obliga a comprobar **en el momento en que se configure el realm**, no antes:
+
 - **Test de integración en el edge**: un token emitido por un issuer distinto del realm de
   plataforma recibe 401. Cubre que no quedó un segundo issuer aceptado por descuido.
 - **Test de integración en `auth-bff`**: una petición a `/admin/**` con una sesión de `codehunters`
   —no de `master`— recibe 403 aunque el usuario tenga roles de administrador en su propio realm.
-- **Aserción de configuración en CI**: `config/settings/jwt.json` declara exactamente un `issuer`, y
-  su realm es el de plataforma. Falla el build si aparece un segundo.
-  **Mitad implementada el 2026-10-09**: `scripts/check-jwt-single-issuer.sh`, dentro de
-  `make check` y por tanto en cada pull request, exige exactamente un `issuer` y un `jwks_url` en
-  todo `config/settings/`, que ambos nombren el mismo realm, y que el template no hardcodee
-  ninguno de los dos —lo que los pondría fuera del alcance del guardia—. La otra mitad, que ese
-  realm **sea** el de plataforma, está escrita y apagada: se enciende exportando
-  `JWT_PLATFORM_REALM`, y hoy fallaría, porque la configuración viva sigue apuntando a
-  `.../realms/forgeos`. Encenderla corresponde al cambio que mueva el realm, no a este ADR.
 - **Gate de despliegue**: la lista de clientes del realm `codehunters` incluye `forgeos-web`, y el
   realm `forgeos` no existe. Verificable contra la Admin API.
 - **Aserción sobre `impersonation`**: ningún usuario ni grupo de `master` tiene ese rol del cliente
   `<realm>-realm`. Comprobable en el mismo gate.
+- **Encender `JWT_PLATFORM_REALM`** en CI, que es lo que convierte la mudanza en irreversible por
+  descuido.
 
 ## More Information
 
