@@ -802,8 +802,20 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
    el `Authorization: Bearer ...` y no tratar los `x-user-*` como prueba de identidad por
    si solos. El gateway los garantiza hoy, pero un backend accesible por otra via no
    tiene esa garantia.
-2. **HSTS apagado.** `hsts.seconds = 0` mientras se trabaja sobre HTTP plano. Subirlo con
-   `HSTS_SECONDS` al desplegar con TLS; solo se renderiza si `tls.disabled=false`.
+2. **HSTS apagado, con TLS encendido.** El bloque solo se renderiza si
+   `tls.disabled=false`, y en la configuracion commiteada **lo esta**, asi que el bloque
+   **si se emite** — con `sts_seconds: 0`, es decir sin cabecera
+   `Strict-Transport-Security`. Verificado sobre el render, no supuesto.
+
+   Sigue en `0` a proposito, y la razon no es que se trabaje sobre HTTP plano: el
+   certificado de desarrollo es autofirmado. HSTS le dice al navegador que use HTTPS para
+   ese host **y le quita la posibilidad de saltarse el aviso de certificado**, y esa
+   memoria sobrevive al contenedor. En `localhost` eso seria una trampa compartida con
+   cualquier otro proyecto que use el mismo host.
+
+   Subirlo con `HSTS_SECONDS` al desplegar con un certificado real.
+   `make smoke-headers` asevera las **dos** direcciones: ausente con `HSTS_SECONDS=0`,
+   presente y con `includeSubDomains` cuando se sube.
 3. ~~**Falta el smoke test de ADR-0001.**~~ **Hecho el 2026-10-09**:
    `make smoke-headers` arranca el gateway con la imagen pineada, le pide una respuesta real
    y asevera las tres cabeceras mas `Referrer-Policy`, `X-XSS-Protection` y HSTS **en las dos
