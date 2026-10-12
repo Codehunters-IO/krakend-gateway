@@ -339,3 +339,63 @@ func TestAWildcardMatchesExactlyOneSegment(t *testing.T) {
 			"change the ADR must carry", rec.Code)
 	}
 }
+
+// Introspection is the only thing that catches a revoked token, and its error
+// path is deliberately fail-open so a Keycloak blip does not take the platform
+// down. That tolerance is what makes missing credentials dangerous: with an
+// empty client_id/client_secret every introspection call fails, every failure
+// logs a warning and admits the token, and revocation is off forever while the
+// configuration claims it is on. A blip is temporary; a missing secret is not.
+// Refusing the load turns an invisible permanent fail-open into a boot failure
+// that scripts/check-plugins-loaded.sh already gates on.
+func TestIntrospectionWithoutCredentialsFailsTheLoad(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		clientID,secret string
+	}{
+		{"both empty", "", ""},
+		{"no secret", "gateway", ""},
+		{"no client id", "", "s3cret"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := defaultConfig("http://127.0.0.1:1/certs")
+			block := cfg[pluginName].(map[string]interface{})
+			block["introspection_enabled"] = true
+			block["introspection_client_id"] = c.clientID
+			block["introspection_client_secret"] = c.secret
+
+			_, err := registerer(pluginName).registerHandlers(context.Background(), cfg, http.NotFoundHandler())
+			if err == nil {
+				t.Fatal("introspection enabled without credentials must fail the load, not fail open on every request")
+			}
+			if !strings.Contains(err.Error(), "introspection") {
+				t.Errorf("error must name introspection so the operator knows what to fix, got: %v", err)
+			}
+		})
+	}
+}
+
+// Negative control: the check must not reject a correctly configured
+// introspection block, or it would be a guard that only ever cries wolf.
+func TestIntrospectionWithCredentialsLoads(t *testing.T) {
+	cfg := defaultConfig("http://127.0.0.1:1/certs")
+	block := cfg[pluginName].(map[string]interface{})
+	block["introspection_enabled"] = true
+	block["introspection_client_id"] = "gateway"
+	block["introspection_client_secret"] = "s3cret"
+
+	if _, err := registerer(pluginName).registerHandlers(context.Background(), cfg, http.NotFoundHandler()); err != nil {
+		t.Fatalf("a complete introspection block must load, got: %v", err)
+	}
+}
+
+// Negative control: introspection off is the committed default, and it must
+// keep loading with the empty credentials that default ships.
+func TestIntrospectionDisabledLoadsWithoutCredentials(t *testing.T) {
+	cfg := defaultConfig("http://127.0.0.1:1/certs")
+	cfg[pluginName].(map[string]interface{})["introspection_enabled"] = false
+
+	if _, err := registerer(pluginName).registerHandlers(context.Background(), cfg, http.NotFoundHandler()); err != nil {
+		t.Fatalf("introspection disabled must load with no credentials, got: %v", err)
+	}
+}
