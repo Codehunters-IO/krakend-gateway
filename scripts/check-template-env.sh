@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Fails when the template and the compose environment disagree in EITHER
-# direction: a variable the template reads that compose never passes, or a
-# variable compose passes that nothing reads.
+# Fails when the template, the compose environment and .env.example disagree in
+# ANY direction: a variable the template reads that compose never passes, a
+# variable compose passes that nothing reads, or a variable compose accepts that
+# .env.example never tells the operator about.
 #
 # This is scripts/check-settings-orphan-keys.sh with the arrow reversed, and it
 # guards the same class of defect from the other side. That script's header says
@@ -21,6 +22,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="$ROOT_DIR/config/krakend.tmpl"
 COMPOSE="$ROOT_DIR/docker-compose.yml"
+ENV_EXAMPLE="$ROOT_DIR/.env.example"
 SETTINGS_DIR="$ROOT_DIR/config/settings"
 
 # Variables the template reads that compose deliberately does not pass, each
@@ -100,6 +102,41 @@ if (( ${#orphans[@]} )); then
 fi
 
 echo "check-template-env: OK ($passed compose variables, every one read by something)"
+
+# The third direction: the operator's. A variable can be reachable from compose
+# AND read by the template and still be invisible to whoever has to set it,
+# because the only places it appears are two files nobody reads before a
+# deployment. VALKEY_PASSWORD was worse than invisible -- it defaulted to
+# `devpassword`, so a production deployment that never set it came up with a
+# known password and nothing failed. .env.example is where that list lives now,
+# and a list that drifts is back to being documentation nobody can trust.
+#
+# FC_* are the renderer's own wiring, fixed by the Dockerfile and not an
+# operator knob, so they are not expected in the template.
+documented() {
+  grep -qE "^#?$1=" "$ENV_EXAMPLE"
+}
+
+undocumented=()
+operator_vars=0
+while IFS= read -r var; do
+  [[ -n "$var" ]] || continue
+  [[ "$var" == FC_* ]] && continue
+  operator_vars=$((operator_vars + 1))
+  documented "$var" || undocumented+=("$var")
+done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*([A-Z_][A-Z0-9_]*)=.*/\1/p' "$COMPOSE" | sort -u)
+
+if (( ${#undocumented[@]} )); then
+  echo "check-template-env: FAILED" >&2
+  echo "  docker-compose.yml accepts these, and .env.example documents none of them:" >&2
+  printf '    %s\n' "${undocumented[@]}" >&2
+  echo "  .env.example is the only list an operator reads before a deployment." >&2
+  echo "  Add each one as VAR=value, or commented as #VAR=default when the" >&2
+  echo "  default is the right choice, with a line saying what it does." >&2
+  exit 1
+fi
+
+echo "check-template-env: OK ($operator_vars operator variables, every one in .env.example)"
 
 # A flag rendered from a conditional expression can emit the wrong JSON type,
 # and for roles_enforce that is a fail-OPEN: the field is *bool, a non-boolean
