@@ -90,13 +90,16 @@ docker compose restart
 ### Apuntar el gateway a microservicios locales
 
 Cada backend se declara en el bloque `backends` de `endpoints.yaml` con un
-`host_default` y el `host_env` que lo sobreescribe. Los tres actuales:
+`host_default` y el `host_env` que lo sobreescribe. Hoy hay **uno**, porque las rutas
+de aplicacion salieron de este repositorio (ver **Rutas de aplicacion**):
 
 | Envvar | Default | Backend |
 |--------|---------|---------|
-| `FORGEOS_HOST` | `http://host.docker.internal:8080` | ForgeOS (18 endpoints) |
-| `KNOWLEDGE_MCP_HOST` | `http://host.docker.internal:8085` | Catalogo de conocimiento, MCP + REST (8) |
-| `AUTH_BFF_HOST` | `http://host.docker.internal:8086` | `auth-bff`, flujo OIDC y sesion (5) |
+| `AUTH_BFF_HOST` | `http://host.docker.internal:8086` | `auth-bff`, flujo OIDC y sesion (5 endpoints) |
+
+Un backend de aplicacion llega **con** sus rutas: declarar su `host_env` aqui sin rutas
+que lo usen deja una envvar que compose propaga y nada lee, y
+`scripts/check-template-env.sh` falla el build por eso.
 
 Resolucion: el generador escribe `host_env`/`host_default` en `endpoints.json` y el
 template resuelve `{{ env $host_env | default $host_default }}` por endpoint — si la
@@ -113,8 +116,7 @@ Usar `host.docker.internal` para que KrakenD dentro del contenedor llegue al pue
 
 ```bash
 # .env junto a docker-compose.yml
-FORGEOS_HOST=http://host.docker.internal:9095
-KNOWLEDGE_MCP_HOST=http://host.docker.internal:9098
+AUTH_BFF_HOST=http://host.docker.internal:9096
 ```
 
 ```bash
@@ -127,20 +129,18 @@ Conectar el gateway a la red del micro (o viceversa) y apuntar al nombre del ser
 
 ```bash
 # .env
-FORGEOS_HOST=http://forgeos-api:8080
+AUTH_BFF_HOST=http://auth-bff:8086
 
 # unirse a la red externa donde vive el micro
-docker network connect forgeos_default krakend-gateway-krakend-1
+docker network connect auth-bff_default krakend-gateway-krakend-1
 ```
 
 El nombre real del contenedor sale de `docker compose ps --format '{{.Name}}'`.
 
-#### Caso 3 — Mix: gateway local + algunos micros remotos
+#### Caso 3 — Mix: gateway local + micro remoto
 
 ```bash
-FORGEOS_HOST=http://localhost:9095 \
-KNOWLEDGE_MCP_HOST=https://knowledge.dev.example.com \
-make up
+AUTH_BFF_HOST=https://auth.dev.example.com make up
 ```
 
 #### Verificar overrides activos
@@ -154,9 +154,7 @@ make generate && rg '"host"' krakend.json | sort -u
 #### Override sin contenedor (KrakenD nativo via `make run`)
 
 ```bash
-FORGEOS_HOST=http://localhost:9095 \
-KNOWLEDGE_MCP_HOST=http://localhost:9098 \
-make run
+AUTH_BFF_HOST=http://localhost:9096 make run
 ```
 
 ### Produccion
@@ -224,8 +222,7 @@ por ese camino. Para cargar un subconjunto son dos pasos explicitos:
 
 ```bash
 make gen                           # todos los productos (default)
-make gen PRODUCTS=forgeos          # solo forgeos
-make gen PRODUCTS=forgeos,platform # forgeos + el flujo de login
+make gen PRODUCTS=platform         # solo el flujo de login
 make dev                           # o `make up` si los plugins ya estan compilados
 ```
 
@@ -239,14 +236,14 @@ restaura el fichero. Si un `endpoints.json` filtrado se cuela en un commit, el
 
 ```yaml
 products:                              # unidad de carga; PRODUCTS= filtra por estas claves
-  forgeos:
+  myapp:
     prefix: ""                         # "" o ruta con / inicial y sin / final
-    backend: forgeos                   # default para sus endpoints
+    backend: myapp                     # default para sus endpoints
 
 backends:                              # hosts logicos, referenciados por clave
-  forgeos:
+  myapp:
     host_default: http://host.docker.internal:8080
-    host_env: FORGEOS_HOST             # envvar que lo sobreescribe en runtime
+    host_env: MYAPP_HOST               # envvar que lo sobreescribe en runtime
 
 defaults:                              # aplicados a endpoints que omitan el campo
   output_encoding: no-op
@@ -254,9 +251,9 @@ defaults:                              # aplicados a endpoints que omitan el cam
   timeout: null
 
 endpoints:
-  - path: /api/projects/{projectId}/stories   # ruta expuesta por el gateway
+  - path: /api/widgets/{widgetId}/parts       # ruta expuesta por el gateway
     method: GET                               # GET|POST|PUT|PATCH|DELETE
-    backend: forgeos                          # clave declarada en backends
+    backend: myapp                            # clave declarada en backends
     auth: protected                           # public => entra en skip_paths del JWT
     input_headers: [Accept, Authorization]    # explicito, sin herencia
 ```
@@ -293,8 +290,8 @@ endpoints duplicados (`method` + `prefix` + `path`), prefijo de producto invalid
 backend no resoluble (ni en el endpoint ni en el producto).
 
 Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar —
-la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
-`""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
+la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo un producto con
+prefix `""` y bajo otro con prefix `/vitxo` son rutas distintas.
 
 Nueve capas de validacion en total:
 
@@ -788,8 +785,8 @@ Derivadas del spec de endpoints, no mantenidas a mano — ver
 [Rutas publicas y `skip_paths`](#rutas-publicas-y-skip_paths):
 
 ```
-/public/*  /auth/login/*  /auth/callback  /auth/session  /auth/logout
-/auth/backchannel-logout  /api/ping
+/public/*  /__health  /auth/login/*  /auth/callback  /auth/session  /auth/logout
+/auth/backchannel-logout
 ```
 
 `/auth/backchannel-logout` es el canal trasero de OIDC: lo invoca Keycloak, no un
@@ -862,11 +859,10 @@ que el generador renderiza a `qos/ratelimit/router`:
     strategy: ip
 ```
 
-Hoy lo llevan **2 de 31** endpoints —`GET /auth/login/{provider}` y `GET /auth/callback`—,
+Hoy lo llevan **2 de 5** endpoints —`GET /auth/login/{provider}` y `GET /auth/callback`—,
 los dos puntos de entrada del flujo OIDC, que son publicos y previos a cualquier token.
-Los otros cuatro endpoints publicos (`GET /auth/session`, `POST /auth/logout`,
-`POST /auth/backchannel-logout`, `GET /api/ping`) solo estan cubiertos por el limite de
-servicio.
+Los otros tres (`GET /auth/session`, `POST /auth/logout`,
+`POST /auth/backchannel-logout`) solo estan cubiertos por el limite de servicio.
 
 > `rate_limit.json` declaraba ademas `endpoint_max_rate: 100` y
 > `endpoint_client_max_rate: 20`. **Ningun camino del template los leia**: eran config
@@ -888,11 +884,11 @@ fichero mas los endpoints marcados `auth: public` en `endpoints.yaml` (ver
 Lista renderizada hoy:
 
 ```
-/public/*  /auth/login/*  /auth/callback  /auth/session  /auth/logout
-/auth/backchannel-logout  /api/ping
+/public/*  /__health  /auth/login/*  /auth/callback  /auth/session  /auth/logout
+/auth/backchannel-logout
 ```
 
-`/public/*` es el unico estatico de `jwt.json`; el resto sale de los endpoints marcados
+`/public/*` y `/__health` son los dos estaticos de `jwt.json`; el resto sale de los endpoints marcados
 `auth: public`. Comprobar la lista efectiva en cualquier momento:
 
 ```bash
@@ -920,10 +916,13 @@ Convencion para endpoints **sin autenticacion**: prefijo `/public/`. El bloque `
 ### Endpoints publicos actuales
 
 **Ninguno usa el prefijo `/public/`.** El wildcard sigue declarado y operativo, listo
-para el primero que lo necesite. Los endpoints publicos de hoy son el flujo de `auth-bff`
-(`/auth/login/{provider}`, `/auth/callback`, `/auth/session`, `/auth/logout`,
-`/auth/backchannel-logout`) y el health check `/api/ping` — publicos por `auth: public`
-en `endpoints.yaml`, no por prefijo.
+para el primero que lo necesite. Los endpoints publicos de hoy son los cinco del flujo de
+`auth-bff` (`/auth/login/{provider}`, `/auth/callback`, `/auth/session`, `/auth/logout`,
+`/auth/backchannel-logout`) — publicos por `auth: public` en `endpoints.yaml`, no por
+prefijo. `/__health` lo sirve KrakenD y entra en la lista por `jwt.json`, no por una ruta.
+
+Dicho de otro modo: **hoy el gateway no expone ninguna ruta protegida.** Las de aplicacion
+salieron, y la cadena de plugins sigue montada y validada esperando a las que entren.
 
 ### Wildcard skip_paths (interno)
 
@@ -1049,7 +1048,7 @@ El bloque HSTS solo se renderiza cuando `tls.disabled=false` (HSTS sobre HTTP pl
 
 ## Endpoints
 
-El gateway expone **31 endpoints** sobre tres backends. La fuente de verdad es
+El gateway expone **5 endpoints** sobre un backend. La fuente de verdad es
 [`endpoints.yaml`](endpoints.yaml) — esta lista se deriva de ella, asi que ante una
 discrepancia manda el fichero. Para imprimir la lista viva:
 
@@ -1070,43 +1069,44 @@ Flujo OIDC y sesion respaldada por cookie. Todos publicos ante el gateway: el pr
 | POST | `/auth/logout` | public |
 | POST | `/auth/backchannel-logout` | public |
 
-### `forgeos` (`FORGEOS_HOST`, 18 endpoints)
+### Rutas de aplicacion
 
-| Metodo | Path | Auth |
-|--------|------|------|
-| GET | `/api/ping` | public |
-| GET | `/api/organizations` | protected |
-| POST | `/api/organizations` | protected |
-| GET | `/api/organizations/{orgId}/members` | protected |
-| GET | `/api/projects` | protected |
-| POST | `/api/projects` | protected |
-| GET | `/api/projects/{projectId}/board` | protected |
-| PUT | `/api/projects/{projectId}/description` | protected |
-| GET | `/api/projects/{projectId}/hub` | protected |
-| GET | `/api/projects/{projectId}/summary` | protected |
-| GET | `/api/projects/{projectId}/refinement/turns` | protected |
-| POST | `/api/projects/{projectId}/refinement/turns` | protected |
-| GET | `/api/projects/{projectId}/refinement/stream` | protected |
-| GET | `/api/projects/{projectId}/stories` | protected |
-| POST | `/api/projects/{projectId}/stories` | protected |
-| GET | `/api/stories/{id}` | protected |
-| GET | `/api/stories/{id}/refinement/stream` | protected |
-| GET | `/api/agent-runs/{id}/stream` | protected |
+**Ya no viven aqui.** El 2026-10-12 salieron las de ForgeOS (18) y las del catalogo de
+conocimiento (8), y se cargan por aplicacion con un mecanismo que esta por elegir.
 
-Los `/stream` son SSE: llevan `disable_host_sanitize` y un timeout propio que sobrevive
-al de servicio.
+El motivo es reproceso: cada producto que entraba obligaba a editar este repositorio,
+regenerar `endpoints.json`, actualizar sus conteos en esta documentacion y arrastrar su
+backend en `docker-compose.yml`. Un gateway reutilizable no puede tener el catalogo de sus
+inquilinos en su propio arbol.
 
-### `knowledge` (`KNOWLEDGE_MCP_HOST`, 8 endpoints)
+Lo que queda es la superficie de la plataforma: el flujo OIDC y de sesion que **emite** la
+credencial que este gateway valida. Ver [`docs/session-flow.md`](docs/session-flow.md).
 
-Catalogo de conocimiento sobre MCP Streamable HTTP.
+Lo que el repositorio conserva para cuando vuelvan a entrar rutas:
 
-| Metodo | Path | Auth |
-|--------|------|------|
-| GET | `/mcp` | protected |
-| POST | `/mcp` | protected |
-| DELETE | `/mcp` | protected |
-| GET | `/api/v1/collections` | protected |
-| GET | `/api/v1/projects` | protected |
-| POST | `/api/v1/documents` | protected |
-| POST | `/api/v1/memories` | protected |
-| POST | `/api/v1/search` | protected |
+- **`x-header-sets`** en `endpoints.yaml` — `identity` es exactamente la lista que inyecta
+  el plugin `jwt-headers`, y `anonymous` la de una ruta publica. Hoy no las usa ninguna
+  ruta, y siguen ahi a proposito: son contrato del gateway, no de una aplicacion.
+- **Las nueve capas de validacion**, el generador y sus reglas de esquema, que siguen
+  validando lo que se declare.
+- **El filtro `PRODUCTS`**, que es lo que ADR-0007 nombra para que un segundo despliegue
+  sirva un catalogo distinto sin una segunda imagen.
+
+#### Quitar una ruta no la convierte en 404
+
+`jwt-headers` es un `plugin/http-server`: envuelve el servidor entero y contesta **antes
+del router**. Asi que una ruta que ya no existe sigue respondiendo `401`, no `404`.
+Medido el 2026-10-12 contra el gateway arrancado con estos cinco endpoints:
+
+| Peticion | Codigo | Por que |
+|---|---|---|
+| `GET /__health` | `200` | en `skip_paths`, y lo sirve KrakenD |
+| `GET /auth/session` | `500` | ruteada; su backend no corre |
+| `GET /api/projects` | `401` | **ya no existe**, pero el plugin pide token antes de enrutar |
+| `GET /zzz-no-existe` | `401` | idem: nunca existio |
+| `GET /public/cualquiera` | `404` | `/public/*` esta en `skip_paths`, el plugin deja pasar y responde el router |
+
+La consecuencia practica: **el codigo de estado dice si la ruta esta en `skip_paths`, no si
+existe.** Un cliente que llame a una ruta retirada vera `401` y creera que le falta
+permiso. Y al diagnosticar, un `401` no prueba que la ruta siga declarada — para eso,
+`jq -r '.endpoints[].endpoint' config/settings/endpoints.json`.

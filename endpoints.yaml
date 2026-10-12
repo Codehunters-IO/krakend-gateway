@@ -6,6 +6,18 @@
 #
 # Anything under x-* is anchor scaffolding for this file only; the generator
 # ignores unknown top-level keys.
+#
+# WHAT BELONGS HERE. Only the platform's own surface: the OIDC and session flow
+# that issues the credential this gateway validates. Application routes were
+# removed on 2026-10-12 (ForgeOS 18, knowledge 8) and are loaded per application
+# by a mechanism still being chosen. Adding an application's routes back into
+# this file is what that change was meant to prevent.
+#
+# The two header sets below have no route using them today, and they stay on
+# purpose: they are the gateway's contract, not any application's. `identity` is
+# exactly the list the jwt-headers plugin injects, so a route that declares
+# anything else either drops a claim the backend needs or forwards a header the
+# caller controls.
 
 x-header-sets:
   # Public routes: no identity headers reach the backend.
@@ -31,25 +43,6 @@ x-header-sets:
     - Tracestate
     - X-Traceparent
 
-  # MCP Streamable HTTP: identity claims plus the protocol/session headers the
-  # transport needs (Mcp-Session-Id round-trips, Last-Event-ID resumes a stream).
-  mcp: &mcp
-    - Accept
-    - Content-Type
-    - Authorization
-    - Mcp-Session-Id
-    - Mcp-Protocol-Version
-    - Last-Event-ID
-    - x-user-id
-    - x-user-roles
-    - x-username
-    - x-org-slug
-    - X-Organization-Id
-    - x-ip
-    - Traceparent
-    - Tracestate
-    - X-Traceparent
-
   # The OIDC flow and the session endpoints. Cookie is the point: auth-bff reads
   # __Host-sid on /auth/session and /auth/logout, and Spring stores the
   # authorization request (state + PKCE verifier) in its own HTTP session, so
@@ -67,26 +60,18 @@ x-header-sets:
 # A product is the unit of loading. PRODUCTS is consumed by gen/check, not dev:
 # to load a subset, run `make gen PRODUCTS=a,b` then `make dev` — dev does not
 # regenerate endpoints.json, it uses what's on disk. `prefix` is prepended to the
-# exposed path and never reaches the backend, so today's three products keep
-# prefix "" and no route moves.
+# exposed path and never reaches the backend; `platform` keeps prefix "" so no
+# route moves.
+#
+# One product left means the filter has nothing to filter today. It stays because
+# it is also what ADR-0007 names as the way a second deployment serves a
+# different catalogue without a second image.
 products:
-  forgeos:
-    prefix: ""
-    backend: forgeos
-  knowledge:
-    prefix: ""
-    backend: knowledge
   platform:
     prefix: ""
     backend: auth_bff
 
 backends:
-  forgeos:
-    host_default: http://host.docker.internal:8080
-    host_env: FORGEOS_HOST
-  knowledge:
-    host_default: http://host.docker.internal:8085
-    host_env: KNOWLEDGE_MCP_HOST
   auth_bff:
     host_default: http://host.docker.internal:8086
     host_env: AUTH_BFF_HOST
@@ -167,206 +152,3 @@ endpoints:
       - Traceparent
       - Tracestate
       - X-Traceparent
-
-  - path: /api/ping
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: public
-    input_headers: *anonymous
-
-  - path: /api/organizations
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/organizations
-    method: POST
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/organizations/{orgId}/members
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects
-    method: POST
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/hub
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/summary
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/description
-    method: PUT
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/stories
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/stories
-    method: POST
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/board
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/refinement/turns
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/projects/{projectId}/refinement/turns
-    method: POST
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/stories/{id}
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    input_headers: *identity
-
-  # SSE streams — no-op passthrough with a 3600s timeout so the progress stream
-  # survives the 3s service timeout; host sanitize is off to keep the raw URL.
-  - path: /api/projects/{projectId}/refinement/stream
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    timeout: 3600s
-    disable_host_sanitize: true
-    input_headers: *identity
-
-  - path: /api/stories/{id}/refinement/stream
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    timeout: 3600s
-    disable_host_sanitize: true
-    input_headers: *identity
-
-  - path: /api/agent-runs/{id}/stream
-    method: GET
-    backend: forgeos
-    product: forgeos
-    auth: protected
-    timeout: 3600s
-    disable_host_sanitize: true
-    input_headers: *identity
-
-  # Knowledge catalog MCP (spring-ai-qdrant-mcp) — Streamable HTTP transport.
-  # One block per method: POST carries JSON-RPC, GET is the long-lived server
-  # stream, DELETE terminates the session.
-  - path: /mcp
-    method: POST
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 120s
-    disable_host_sanitize: true
-    input_headers: *mcp
-
-  - path: /mcp
-    method: GET
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 3600s
-    disable_host_sanitize: true
-    input_headers: *mcp
-
-  - path: /mcp
-    method: DELETE
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 30s
-    input_headers: *mcp
-
-  # REST surface of the same use cases, for non-MCP clients.
-  - path: /api/v1/search
-    method: POST
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 60s
-    input_headers: *identity
-
-  # Ingest accepts up to 4MB and runs chunking plus embeddings inline.
-  - path: /api/v1/documents
-    method: POST
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 300s
-    input_headers: *identity
-
-  - path: /api/v1/memories
-    method: POST
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    timeout: 60s
-    input_headers: *identity
-
-  - path: /api/v1/collections
-    method: GET
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    input_headers: *identity
-
-  - path: /api/v1/projects
-    method: GET
-    backend: knowledge
-    product: knowledge
-    auth: protected
-    input_headers: *identity

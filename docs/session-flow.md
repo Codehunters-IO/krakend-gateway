@@ -197,7 +197,7 @@ flow at all — `/auth/*` is in its `skip_paths`.
 ### Flow 2 — authenticated request
 
 ```
-Front → GET /api/projects   (cookie, credentials:'include')
+Front → GET /api/<app route> (cookie, credentials:'include')
 session-resolver:
   path in skip_paths, OPTIONS, or Authorization present  → pass through (dual mode)
   no cookie                                              → pass through (jwt-headers 401s)
