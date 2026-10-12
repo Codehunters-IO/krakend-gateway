@@ -1091,3 +1091,22 @@ Lo que el repositorio conserva para cuando vuelvan a entrar rutas:
   validando lo que se declare.
 - **El filtro `PRODUCTS`**, que es lo que ADR-0007 nombra para que un segundo despliegue
   sirva un catalogo distinto sin una segunda imagen.
+
+#### Quitar una ruta no la convierte en 404
+
+`jwt-headers` es un `plugin/http-server`: envuelve el servidor entero y contesta **antes
+del router**. Asi que una ruta que ya no existe sigue respondiendo `401`, no `404`.
+Medido el 2026-10-12 contra el gateway arrancado con estos cinco endpoints:
+
+| Peticion | Codigo | Por que |
+|---|---|---|
+| `GET /__health` | `200` | en `skip_paths`, y lo sirve KrakenD |
+| `GET /auth/session` | `500` | ruteada; su backend no corre |
+| `GET /api/projects` | `401` | **ya no existe**, pero el plugin pide token antes de enrutar |
+| `GET /zzz-no-existe` | `401` | idem: nunca existio |
+| `GET /public/cualquiera` | `404` | `/public/*` esta en `skip_paths`, el plugin deja pasar y responde el router |
+
+La consecuencia practica: **el codigo de estado dice si la ruta esta en `skip_paths`, no si
+existe.** Un cliente que llame a una ruta retirada vera `401` y creera que le falta
+permiso. Y al diagnosticar, un `401` no prueba que la ruta siga declarada — para eso,
+`jq -r '.endpoints[].endpoint' config/settings/endpoints.json`.
