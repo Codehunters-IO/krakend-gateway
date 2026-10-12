@@ -3,9 +3,9 @@ services:
     image: valkey/valkey:9-alpine
     container_name: forgeos-gw-valkey
     # appendonly no is deliberate: session tokens must not reach disk.
-    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:-devpassword}", "--appendonly", "no"]
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:?valkey password is required (see .env.example)}", "--appendonly", "no"]
     healthcheck:
-      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:-devpassword}", "ping"]
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:?valkey password is required (see .env.example)}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -13,8 +13,12 @@ services:
   krakend:
     image: krakend:2.13.4
     ports:
+      # KrakenD listens on ONE port (service.json -> port), and TLS makes that
+      # same port serve HTTPS. There was an 8443:8443 mapping here that
+      # nothing listened on: measured 2026-10-11, the container has :8090 and
+      # :9090 open and nothing on :8443, so `curl https://localhost:8443` --
+      # the command the README documented -- could never have worked.
       - "8090:8090"
-      - "8443:8443"
     volumes:
       - ./config:/etc/krakend
       - ./plugins/build:/opt/krakend/plugins
@@ -43,7 +47,7 @@ services:
       - SESSION_ENABLED=${SESSION_ENABLED:-}
       - VALKEY_ADDR=${VALKEY_ADDR:-valkey:6379}
       - VALKEY_USERNAME=${VALKEY_USERNAME:-}
-      - VALKEY_PASSWORD=${VALKEY_PASSWORD:-devpassword}
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD:?valkey password is required (see .env.example)}
       - SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME:-sid}
       - AUTH_BFF_REFRESH_URL=${AUTH_BFF_REFRESH_URL:-http://host.docker.internal:8086/internal/sessions/{sid}/refresh}
       - INTERNAL_SHARED_SECRET=${INTERNAL_SHARED_SECRET:?internal shared secret is required}

@@ -173,6 +173,17 @@ func (r registerer) registerHandlers(ctx context.Context, extra map[string]inter
 
 	var tokenIntrospector *introspector
 	if cfg.IntrospectionEnabled {
+		// The request-time error path admits the token on purpose, so a Keycloak
+		// blip cannot take the platform down. Empty credentials make every call
+		// fail, which turns that deliberate tolerance into a permanent, silent
+		// loss of revocation while the configuration still claims introspection
+		// is on. Refusing the load surfaces it at boot instead, where
+		// scripts/check-plugins-loaded.sh already gates on a missing plugin.
+		if cfg.IntrospectionClientID == "" || cfg.IntrospectionClientSecret == "" {
+			return nil, fmt.Errorf("[%s] introspection_enabled needs introspection_client_id and "+
+				"introspection_client_secret: without both, every introspection call fails and the "+
+				"fail-open path would admit revoked tokens", pluginName)
+		}
 		tokenIntrospector = newIntrospector(cfg)
 		logger.Info("introspection enabled",
 			"url", cfg.IntrospectionURL, "derive_from_iss", cfg.IntrospectionURL == "",

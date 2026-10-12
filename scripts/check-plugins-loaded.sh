@@ -52,7 +52,23 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
   exit 1
 fi
 
-logs="$(docker logs "$CONTAINER" 2>&1 || true)"
+# Only THIS boot's lines. `docker logs` keeps the whole history of a container,
+# and `docker compose restart` reuses it, so without a window the previous
+# boot's "plugin loaded" lines satisfy this check and the gate passes while the
+# running edge has no plugin at all. Measured 2026-10-11: with
+# introspection_enabled true and no credentials, jwt-headers refused its config,
+# KrakenD logged the reason and served without it, and this script still
+# reported "OK (5 plugins loaded)". The README sends people down exactly that
+# path -- `docker compose restart` for a configuration-only change.
+started_at="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
+if [[ -z "$started_at" ]]; then
+  echo "check-plugins-loaded: cannot read the start time of $CONTAINER" >&2
+  echo "  Without it the whole log history would be searched, and a stale" >&2
+  echo "  \"plugin loaded\" line from an earlier boot would pass this gate." >&2
+  exit 1
+fi
+
+logs="$(docker logs --since "$started_at" "$CONTAINER" 2>&1 || true)"
 
 if grep -q "No plugins registered for the module" <<<"$logs"; then
   echo "check-plugins-loaded: FAILED" >&2

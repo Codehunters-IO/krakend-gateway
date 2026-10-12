@@ -21,6 +21,12 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
+# Local environment values. The README asks for a .env next to
+# docker-compose.yml; .env.example is the versioned template.
+.env
+.env.*
+!.env.example
+
 # TLS certs (mount target only — never commit real certs/keys)
 certs/*
 !certs/.gitkeep
@@ -31,9 +37,6 @@ certs/*.crt
 plugins/*/core
 plugins/build/
 *.so
-
-# Claude Code context
-.claude/
 
 # Transient render written by scripts/check-plugin-chain-order.sh
 .krakend-chain-order.*

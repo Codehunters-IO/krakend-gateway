@@ -61,8 +61,25 @@ Esto ejecuta dos pasos:
 1. `plugin-build` - Compila los 5 plugins dentro de Docker (compatibles con Linux)
 2. `up` - Levanta KrakenD y Valkey con `docker-compose`, montando `config/`, `plugins/build/` y `certs/` como volumenes
 
-`INTERNAL_SHARED_SECRET` es obligatorio: compose falla si no esta definido. Es el secreto
-que `session-resolver` presenta al endpoint interno de `auth-bff`.
+Dos variables son obligatorias y compose falla al arrancar si faltan:
+
+| Envvar | Para que |
+|--------|----------|
+| `INTERNAL_SHARED_SECRET` | Secreto que `session-resolver` presenta al endpoint interno de `auth-bff` |
+| `VALKEY_PASSWORD` | Contrasena de Valkey, compartida por el servidor, su healthcheck y `session-resolver` |
+
+Ambas usan `${VAR:?...}`, no `${VAR:-default}`. Un default de desarrollo valdria igual en
+produccion y nada avisaria: `VALKEY_PASSWORD` cayo a `devpassword` hasta que esto cambio.
+Un secreto ausente tiene que parar el arranque.
+
+`.env.example` lista todas las variables que lee compose, con sus defaults y para que sirve
+cada una. Para empezar:
+
+```bash
+cp .env.example .env
+```
+
+`.env` esta en `.gitignore`; `.env.example` es la plantilla versionada y no lleva secretos.
 
 Si solo cambiaste configuracion (sin tocar codigo de plugins):
 
@@ -165,8 +182,10 @@ make build
 | `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
-| `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
+| `make template-env-check` | Falla si el template lee una envvar que compose no pasa, si compose pasa una que nadie lee, si `.env.example` no documenta una que compose acepta, o si un flag booleano no renderiza booleano |
 | `make authz-check` | Falla si dos reglas de roles se solapan, donde el plugin las uniria |
+| `make plugin-test-counts` | Falla si el contador de tests por plugin del README deriva de las suites reales |
+| `make ports-check` | Falla si compose publica un puerto que nada sirve dentro del contenedor |
 | `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
 | `make plugins-loaded` | Falla si el gateway en marcha no registro los cinco plugins |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
@@ -277,7 +296,7 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo `forgeos` (prefix
 `""`) y bajo `vitxo` (prefix `/vitxo`) son rutas distintas.
 
-Ocho capas de validacion en total:
+Nueve capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
@@ -288,19 +307,23 @@ Ocho capas de validacion en total:
 5. **`scripts/check-endpoint-authorization.sh`** — ningun par de reglas de roles que se
    solapen, porque el plugin las une y `any_of` deja ganar a la mas permisiva.
 6. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
-   no pase, y los flags booleanos renderizan booleanos.
-7. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-8. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+   no pase, ninguna que compose pase y nadie lea, ninguna que compose acepte y
+   `.env.example` no documente, y los flags booleanos renderizan booleanos.
+7. **`scripts/check-published-ports.sh`** — compose no publica ningun puerto que nada
+   sirva dentro del contenedor, y si publica el puerto de servicio.
+8. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+9. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las ocho corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las nueve corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3 a 8.
+por si solo **no** corre las capas 3 a 9.
 
-Las capas 3, 4 y 5 corren **antes** del render a proposito: son jq y python puros sobre los
-ficheros de `config/settings/`, asi que responden incluso si el render no puede correr.
+Las capas 3, 4, 5 y 7 corren **antes** del render a proposito: son jq y python puros sobre
+los ficheros de `config/settings/` y `docker-compose.yml`, asi que responden incluso si el
+render no puede correr.
 
-### Que version de `krakend` usan las capas 6 y 7
+### Que version de `krakend` usan las capas 6 y 8
 
 La que esta pineada, no la que tengas instalada. `scripts/krakend-check.sh` usa el binario
 local si su version coincide con `KRAKEND_IMAGE` del `Makefile`, y si no, corre esa imagen
@@ -390,11 +413,17 @@ Los cinco modulos tienen tests, y corren en CI (`make plugins-test`, job
 
 | Plugin | Funciones `Test*` | Que cubren |
 |--------|------------------:|------------|
-| `session-resolver` | 36 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp`, cabeceras del rechazo |
+| `session-resolver` | 40 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp`, cabeceras del rechazo |
 | `gateway-timeout` | 24 | `500` vacio y lento → `504`; body o rapidez lo impiden; `503` intacto; Flush retenido |
-| `jwt-headers` | 22 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos, cabeceras del rechazo |
+| `jwt-headers` | 40 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos, cabeceras del rechazo, roles por endpoint y modo observacion, y el rechazo de carga cuando la introspeccion no trae credenciales |
 | `trace-context` | 16 | Propagacion, fallback de `Trace-Id`, generacion, 18 formas malformadas |
 | `accept-language` | 13 | Default solo cuando falta, nunca pisa al cliente |
+
+Los contadores no son a mano: `scripts/check-plugin-test-counts.sh` los compara con las
+funciones `Test*` en disco y falla si derivan, porque ya derivaron dos veces —
+`session-resolver` decia 36 contra 40 reales y `jwt-headers` 22 contra 40. Un numero
+bajo es la direccion peligrosa: se lee como "este plugin esta poco cubierto" e invita a
+colar un cambio que la suite si habria cazado. Corre dentro de `make plugins-test`.
 
 Cada suite se valido con **mutation testing**: se rompe el plugin a proposito y se
 comprueba que algun test falla. Un test que pasa con el codigo roto no cubre nada, y
@@ -773,8 +802,20 @@ replay), no en el gateway. Las demas son el flujo de login y el health check.
    el `Authorization: Bearer ...` y no tratar los `x-user-*` como prueba de identidad por
    si solos. El gateway los garantiza hoy, pero un backend accesible por otra via no
    tiene esa garantia.
-2. **HSTS apagado.** `hsts.seconds = 0` mientras se trabaja sobre HTTP plano. Subirlo con
-   `HSTS_SECONDS` al desplegar con TLS; solo se renderiza si `tls.disabled=false`.
+2. **HSTS apagado, con TLS encendido.** El bloque solo se renderiza si
+   `tls.disabled=false`, y en la configuracion commiteada **lo esta**, asi que el bloque
+   **si se emite** — con `sts_seconds: 0`, es decir sin cabecera
+   `Strict-Transport-Security`. Verificado sobre el render, no supuesto.
+
+   Sigue en `0` a proposito, y la razon no es que se trabaje sobre HTTP plano: el
+   certificado de desarrollo es autofirmado. HSTS le dice al navegador que use HTTPS para
+   ese host **y le quita la posibilidad de saltarse el aviso de certificado**, y esa
+   memoria sobrevive al contenedor. En `localhost` eso seria una trampa compartida con
+   cualquier otro proyecto que use el mismo host.
+
+   Subirlo con `HSTS_SECONDS` al desplegar con un certificado real.
+   `make smoke-headers` asevera las **dos** direcciones: ausente con `HSTS_SECONDS=0`,
+   presente y con `includeSubDomains` cuando se sube.
 3. ~~**Falta el smoke test de ADR-0001.**~~ **Hecho el 2026-10-09**:
    `make smoke-headers` arranca el gateway con la imagen pineada, le pide una respuesta real
    y asevera las tres cabeceras mas `Referrer-Policy`, `X-XSS-Protection` y HSTS **en las dos
@@ -897,23 +938,25 @@ Implementacion: al cargar config, las entradas `/*` se separan en lista de prefi
 
 | Puerto | Descripcion |
 |--------|-------------|
-| **8090** | API Gateway (HTTP). `service.json` → `port`; compose publica `8090:8090` |
-| **8443** | API Gateway (HTTPS, opcional — ver TLS / HTTPS) |
+| **8090** | API Gateway, el **unico** puerto de servicio. `service.json` → `port`; compose publica `8090:8090`. Sirve HTTPS o HTTP segun `tls.json`, nunca los dos a la vez; con la configuracion commiteada (`disabled: false`) sirve HTTPS |
 | **9090** | Metricas (Prometheus). Listener propio, separado del puerto de servicio |
 | **6379** | Valkey, solo dentro de la red de compose (contenedor `forgeos-gw-valkey`) |
 
 ## TLS / HTTPS
 
-Soporte opcional de HTTPS con certificados gestionados por el usuario. Por defecto el flag esta `disabled: true` (gateway escucha solo HTTP) y no requiere ningun cambio operativo.
+HTTPS con certificados gestionados por el usuario. **En la configuracion commiteada esta activo**: `config/settings/tls.json` trae `disabled: false`, asi que el gateway sirve HTTPS en el puerto de servicio y espera encontrar los certs montados. Para desarrollo los genera `make tls-dev-cert`; `make dev` ya lo hace por ti.
 
-### Activar HTTPS
+Ponerlo en `disabled: true` lo devuelve a HTTP plano en el mismo puerto.
+
+### Activar HTTPS desde cero
 
 1. Coloca los certificados en `./certs/` (montado como `/etc/krakend/certs` en el contenedor):
    - `certs/server.crt` — certificado publico (PEM)
    - `certs/server.key` — clave privada (PEM)
-2. Edita `config/settings/tls.json` y cambia `disabled` a `false`.
+2. Comprueba que `config/settings/tls.json` tiene `disabled` en `false` (es el valor commiteado).
 3. Regenera y reinicia: `make generate && make down && make up`.
-4. Verifica: `curl -k https://localhost:8443/__health`.
+4. Verifica: `curl -k https://localhost:8090/__health` → `200`. El puerto es el de
+   servicio, no un puerto aparte para TLS.
 
 ### Cert auto-firmado para desarrollo
 
@@ -948,7 +991,7 @@ Estructura de `keys[]` (cada entrada):
 
 ### Notas operativas
 
-- **Puerto unico**: KrakenD escucha en un solo puerto (`service.port = 8080`). Activar TLS hace que ese mismo puerto sirva HTTPS — no coexisten HTTP y HTTPS simultaneamente. El mapeo `8443:8080` en `docker-compose.yml` solo es relevante con TLS activo.
+- **Puerto unico**: KrakenD escucha en un solo puerto (`service.json` → `port`, hoy `8090`). Activar TLS hace que ese mismo puerto sirva HTTPS — no coexisten HTTP y HTTPS simultaneamente, y no hay un puerto 8443. Compose tuvo publicado `8443:8443` sin nada escuchando detras; se quito.
 - **Endpoint de metricas (`9090`)**: listener separado, no hereda TLS ni comparte puerto con el servicio principal (`config/settings/metrics.json`). Si necesitas TLS en metricas, configuralo aparte.
 - **Rotacion de certificados**: KrakenD carga los certs al arrancar. Cambiar el cert requiere reinicio del contenedor.
 - **CORS**: si los clientes pasan de `http://` a `https://`, actualiza `allow_origins` en `config/settings/cors.json` para incluir el origen HTTPS.
