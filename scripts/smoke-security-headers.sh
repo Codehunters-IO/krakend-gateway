@@ -116,9 +116,12 @@ want_header() {
 
 # A GET, not the HEAD that `curl -I` sends: KrakenD answers HEAD on a GET-only
 # route with 405, and asserting headers on a 405 is asserting on the wrong
-# response. /api/ping's backend is not running, so this is an upstream error —
-# which is the case worth covering, because an error response that loses its
+# response. /auth/session's backend is not running, so this is an upstream error
+# — which is the case worth covering, because an error response that loses its
 # security headers is the one nobody looks at.
+#
+# It was /api/ping until the application routes left endpoints.yaml. Any routed
+# GET whose backend is down does the job; this one is the platform's own.
 probe() { curl -ks -o /dev/null -D - "https://localhost:$PORT$1"; }
 
 echo "smoke-security-headers: $KRAKEND_IMAGE on :$PORT"
@@ -157,7 +160,7 @@ else
   echo "         assertions below run against a routed endpoint instead"
 fi
 
-headers="$(probe /api/ping)"
+headers="$(probe /auth/session)"
 
 echo "  --- ADR-0001's three, on a routed endpoint ---"
 # Measured: frame_deny: false does NOT remove this header in 2.13.4 — the module
@@ -184,13 +187,17 @@ fi
 # unverified and the answer changes how a finding is graded.
 #
 # An uncleaned path is REDIRECTED, not served. That matters because the role
-# gate matches path globs segment by segment, so /api//projects matches no rule;
-# if the router served it as /api/projects, that would be an authorization
+# gate matches path globs segment by segment, so /auth//session matches no rule;
+# if the router served it as /auth/session, that would be an authorization
 # bypass. It answers 301 instead, so the client has to come back on the
 # canonical path where the rule applies. If this ever starts returning 200, the
 # bypass is real and the role tests in plugins/jwt-headers need revisiting.
+#
+# The probe was /api/projects until the application routes left endpoints.yaml.
+# This is a property of the router, not of one route, so any declared path
+# exercises it; a 404 here means the path is not routed, which proves nothing.
 echo "  --- uncleaned paths are redirected, not served ---"
-for variant in "/api//projects" "/API/projects" "/api/projects/" "/api/projects/."; do
+for variant in "/auth//session" "/AUTH/session" "/auth/session/" "/auth/session/."; do
   code="$(curl -ks -o /dev/null -w '%{http_code}' --path-as-is "https://localhost:$PORT$variant")"
   if [[ "$code" == "301" ]]; then
     echo "  ok     $variant -> 301"
@@ -205,7 +212,7 @@ done
 
 render 31536000
 start
-want_header "Strict-Transport-Security" "max-age=31536000; includeSubDomains" "$(probe /api/ping)"
+want_header "Strict-Transport-Security" "max-age=31536000; includeSubDomains" "$(probe /auth/session)"
 
 if (( fail )); then
   echo "smoke-security-headers: FAILED" >&2
