@@ -13,8 +13,12 @@ services:
   krakend:
     image: krakend:2.13.4
     ports:
+      # KrakenD listens on ONE port (service.json -> port), and TLS makes that
+      # same port serve HTTPS. There was an 8443:8443 mapping here that
+      # nothing listened on: measured 2026-10-11, the container has :8090 and
+      # :9090 open and nothing on :8443, so `curl https://localhost:8443` --
+      # the command the README documented -- could never have worked.
       - "8090:8090"
-      - "8443:8443"
     volumes:
       - ./config:/etc/krakend
       - ./plugins/build:/opt/krakend/plugins
