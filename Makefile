@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugins-abi jwt-issuer settings-check template-env-check authz-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugin-test-counts plugins-abi jwt-issuer settings-check template-env-check authz-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -104,6 +104,10 @@ plugins-test: ## Run go test + go vet across every plugin module
 	done; \
 	if [ $$fail -ne 0 ]; then echo "plugins-test: FAILED" >&2; exit 1; fi; \
 	echo "plugins-test: OK ($(words $(PLUGINS)) modules)"
+	@./scripts/check-plugin-test-counts.sh
+
+plugin-test-counts: ## Fail if README's per-plugin test count drifts from the suites
+	./scripts/check-plugin-test-counts.sh
 
 plugins-abi: ## Fail if the plugin builder's Go version drifts from the KrakenD image
 	./scripts/check-plugin-abi.sh $(KRAKEND_IMAGE)

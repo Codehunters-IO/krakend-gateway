@@ -61,8 +61,25 @@ Esto ejecuta dos pasos:
 1. `plugin-build` - Compila los 5 plugins dentro de Docker (compatibles con Linux)
 2. `up` - Levanta KrakenD y Valkey con `docker-compose`, montando `config/`, `plugins/build/` y `certs/` como volumenes
 
-`INTERNAL_SHARED_SECRET` es obligatorio: compose falla si no esta definido. Es el secreto
-que `session-resolver` presenta al endpoint interno de `auth-bff`.
+Dos variables son obligatorias y compose falla al arrancar si faltan:
+
+| Envvar | Para que |
+|--------|----------|
+| `INTERNAL_SHARED_SECRET` | Secreto que `session-resolver` presenta al endpoint interno de `auth-bff` |
+| `VALKEY_PASSWORD` | Contrasena de Valkey, compartida por el servidor, su healthcheck y `session-resolver` |
+
+Ambas usan `${VAR:?...}`, no `${VAR:-default}`. Un default de desarrollo valdria igual en
+produccion y nada avisaria: `VALKEY_PASSWORD` cayo a `devpassword` hasta que esto cambio.
+Un secreto ausente tiene que parar el arranque.
+
+`.env.example` lista todas las variables que lee compose, con sus defaults y para que sirve
+cada una. Para empezar:
+
+```bash
+cp .env.example .env
+```
+
+`.env` esta en `.gitignore`; `.env.example` es la plantilla versionada y no lleva secretos.
 
 Si solo cambiaste configuracion (sin tocar codigo de plugins):
 
@@ -165,8 +182,9 @@ make build
 | `make plugins-abi` | Falla si el Go del builder de plugins se desvia del de la imagen KrakenD |
 | `make jwt-issuer` | Falla si el edge declara algo distinto de exactamente un `issuer` |
 | `make settings-check` | Falla si `settings/` declara una clave que el template no lee |
-| `make template-env-check` | Falla si el template lee una envvar que compose no pasa, o si un flag booleano no renderiza booleano |
+| `make template-env-check` | Falla si el template lee una envvar que compose no pasa, si compose pasa una que nadie lee, si `.env.example` no documenta una que compose acepta, o si un flag booleano no renderiza booleano |
 | `make authz-check` | Falla si dos reglas de roles se solapan, donde el plugin las uniria |
+| `make plugin-test-counts` | Falla si el contador de tests por plugin del README deriva de las suites reales |
 | `make smoke-headers` | Arranca el gateway y comprueba las cabeceras de seguridad en una respuesta real (ADR-0001) |
 | `make plugins-loaded` | Falla si el gateway en marcha no registro los cinco plugins |
 | `make gen` | Regenera `config/settings/endpoints.json` desde `endpoints.yaml` |
@@ -288,7 +306,8 @@ Ocho capas de validacion en total:
 5. **`scripts/check-endpoint-authorization.sh`** — ningun par de reglas de roles que se
    solapen, porque el plugin las une y `any_of` deja ganar a la mas permisiva.
 6. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
-   no pase, y los flags booleanos renderizan booleanos.
+   no pase, ninguna que compose pase y nadie lea, ninguna que compose acepte y
+   `.env.example` no documente, y los flags booleanos renderizan booleanos.
 7. **`krakend check`** — schema de KrakenD sobre el template renderizado.
 8. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
@@ -390,11 +409,17 @@ Los cinco modulos tienen tests, y corren en CI (`make plugins-test`, job
 
 | Plugin | Funciones `Test*` | Que cubren |
 |--------|------------------:|------------|
-| `session-resolver` | 36 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp`, cabeceras del rechazo |
+| `session-resolver` | 40 | Fallo cerrado con Valkey caido, el `sid` nunca se loguea ni se filtra, techo `abs_exp`, cabeceras del rechazo |
 | `gateway-timeout` | 24 | `500` vacio y lento → `504`; body o rapidez lo impiden; `503` intacto; Flush retenido |
-| `jwt-headers` | 22 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos, cabeceras del rechazo |
+| `jwt-headers` | 40 | Firma, `iss`, algoritmo fuera del allowlist, claims requeridos, cabeceras del rechazo, roles por endpoint y modo observacion, y el rechazo de carga cuando la introspeccion no trae credenciales |
 | `trace-context` | 16 | Propagacion, fallback de `Trace-Id`, generacion, 18 formas malformadas |
 | `accept-language` | 13 | Default solo cuando falta, nunca pisa al cliente |
+
+Los contadores no son a mano: `scripts/check-plugin-test-counts.sh` los compara con las
+funciones `Test*` en disco y falla si derivan, porque ya derivaron dos veces —
+`session-resolver` decia 36 contra 40 reales y `jwt-headers` 22 contra 40. Un numero
+bajo es la direccion peligrosa: se lee como "este plugin esta poco cubierto" e invita a
+colar un cambio que la suite si habria cazado. Corre dentro de `make plugins-test`.
 
 Cada suite se valido con **mutation testing**: se rompe el plugin a proposito y se
 comprueba que algun test falla. Un test que pasa con el codigo roto no cubre nada, y
