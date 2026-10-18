@@ -21,12 +21,28 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT_DIR/endpoints.yaml"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "check-endpoint-authorization: python3 is required but not found on PATH" >&2
+# The parser needs PyYAML, and the first python3 on PATH is not always the one
+# that has it: on 2026-10-18 a Homebrew upgrade to 3.15 left the module behind
+# with 3.14 while /usr/bin/python3 still carried it, and this guard -- the only
+# thing that sees two role rules widening each other -- died on the import.
+# Probing for an interpreter that can import yaml keeps a version bump from
+# taking the check down.
+PYTHON=""
+for candidate in python3 /usr/bin/python3; do
+  if command -v "$candidate" >/dev/null 2>&1 &&
+    "$candidate" -c 'import yaml' >/dev/null 2>&1; then
+    PYTHON="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$PYTHON" ]]; then
+  echo "check-endpoint-authorization: needs a python3 that can import yaml;" >&2
+  echo "  tried python3 and /usr/bin/python3. Install PyYAML (pip install pyyaml)." >&2
   exit 1
 fi
 
-python3 - "$SPEC" <<'PY'
+"$PYTHON" - "$SPEC" <<'PY'
 import re
 import sys
 
