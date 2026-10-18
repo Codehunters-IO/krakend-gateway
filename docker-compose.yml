@@ -34,10 +34,6 @@ services:
       - FC_ENABLE=1
       - FC_SETTINGS=/etc/krakend/settings
       - FC_OUT=/tmp/krakend.json
-      # ForgeOS backend (default in hosts.json). Override to retarget.
-      - FORGEOS_HOST=${FORGEOS_HOST:-http://host.docker.internal:8080}
-      # Knowledge catalog (MCP + REST).
-      - KNOWLEDGE_MCP_HOST=${KNOWLEDGE_MCP_HOST:-http://host.docker.internal:8085}
       # auth-bff: owns the OIDC flow and the server-side session. Only the
       # /auth/* routes reach it through here; the session-resolver plugin talks
       # to its /internal endpoint directly, never through the gateway.
