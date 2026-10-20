@@ -293,34 +293,37 @@ Dos productos con prefijos distintos pueden declarar el mismo `path` sin chocar 
 la clave de duplicados incluye el prefijo, asi que `/api/ping` bajo un producto con
 prefix `""` y bajo otro con prefix `/vitxo` son rutas distintas.
 
-Nueve capas de validacion en total:
+Diez capas de validacion en total:
 
 1. **Generador** — reglas de esquema (arriba).
 2. **`make gen-check`** — drift entre YAML y JSON commiteado.
-3. **`scripts/check-jwt-single-issuer.sh`** — exactamente un `issuer`, un
+3. **`scripts/check-krakend-major.sh`** — ningun pin de imagen en `3.x` ni flotante
+   mientras el template declare plugins, porque KrakenD CE 3 no los carga y lo hace en
+   silencio ([ADR-0009](docs/adr/0009-staying-on-krakend-2-x.md)).
+4. **`scripts/check-jwt-single-issuer.sh`** — exactamente un `issuer`, un
    `jwks_url` del mismo realm, y nada de issuers hardcodeados en el template.
-4. **`scripts/check-settings-orphan-keys.sh`** — ninguna clave de `settings/` que el
+5. **`scripts/check-settings-orphan-keys.sh`** — ninguna clave de `settings/` que el
    template no lea.
-5. **`scripts/check-endpoint-authorization.sh`** — ningun par de reglas de roles que se
+6. **`scripts/check-endpoint-authorization.sh`** — ningun par de reglas de roles que se
    solapen, porque el plugin las une y `any_of` deja ganar a la mas permisiva.
-6. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
+7. **`scripts/check-template-env.sh`** — ninguna envvar que el template lea y compose
    no pase, ninguna que compose pase y nadie lea, ninguna que compose acepte y
    `.env.example` no documente, y los flags booleanos renderizan booleanos.
-7. **`scripts/check-published-ports.sh`** — compose no publica ningun puerto que nada
+8. **`scripts/check-published-ports.sh`** — compose no publica ningun puerto que nada
    sirva dentro del contenedor, y si publica el puerto de servicio.
-8. **`krakend check`** — schema de KrakenD sobre el template renderizado.
-9. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
+9. **`krakend check`** — schema de KrakenD sobre el template renderizado.
+10. **`scripts/check-plugin-chain-order.sh`** — orden de `plugin/http-server`.
 
-Las nueve corren con `make check`, que es lo que ejecuta CI en cada PR (job
+Las diez corren con `make check`, que es lo que ejecuta CI en cada PR (job
 `Gateway config check`). Ojo con la direccion de la dependencia en el
 `Makefile`: `gen-check` es *prerequisito* de `check`, asi que `make gen-check`
-por si solo **no** corre las capas 3 a 9.
+por si solo **no** corre las capas 3 a 10.
 
-Las capas 3, 4, 5 y 7 corren **antes** del render a proposito: son jq y python puros sobre
-los ficheros de `config/settings/` y `docker-compose.yml`, asi que responden incluso si el
-render no puede correr.
+Las capas 3, 4, 5, 6 y 8 corren **antes** del render a proposito: son bash, jq y python
+puros sobre `config/settings/`, `docker-compose.yml`, el `Makefile` y el `Dockerfile`, asi
+que responden incluso si el render no puede correr.
 
-### Que version de `krakend` usan las capas 6 y 8
+### Que version de `krakend` usan las capas 7, 9 y 10
 
 La que esta pineada, no la que tengas instalada. `scripts/krakend-check.sh` usa el binario
 local si su version coincide con `KRAKEND_IMAGE` del `Makefile`, y si no, corre esa imagen
@@ -339,6 +342,12 @@ lo vio porque shimea `krakend` a la imagen pineada.
 
 Si no hay binario con la version correcta ni docker, falla diciendolo. `KRAKEND_IMAGE` en el
 entorno pisa el pin.
+
+**No confundir esto con subir el pin.** Tener 3.x instalado en la maquina es una molestia de
+herramienta, y el shim la absorbe. Subir el **pin** a 3.x es otra cosa: KrakenD CE 3 no carga
+plugins Go, asi que acepta `plugin/http-server`, arranca limpio y sirve todo sin autenticar.
+La capa 3 falla antes de llegar ahi; el porque esta medido en
+[ADR-0009](docs/adr/0009-staying-on-krakend-2-x.md).
 
 ### Rutas publicas y `skip_paths`
 
@@ -1087,7 +1096,7 @@ Lo que el repositorio conserva para cuando vuelvan a entrar rutas:
 - **`x-header-sets`** en `endpoints.yaml` — `identity` es exactamente la lista que inyecta
   el plugin `jwt-headers`, y `anonymous` la de una ruta publica. Hoy no las usa ninguna
   ruta, y siguen ahi a proposito: son contrato del gateway, no de una aplicacion.
-- **Las nueve capas de validacion**, el generador y sus reglas de esquema, que siguen
+- **Las diez capas de validacion**, el generador y sus reglas de esquema, que siguen
   validando lo que se declare.
 - **El filtro `PRODUCTS`**, que es lo que ADR-0007 nombra para que un segundo despliegue
   sirva un catalogo distinto sin una segunda imagen.

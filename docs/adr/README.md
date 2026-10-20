@@ -24,3 +24,4 @@ Para ADR-0001 hay tres meses entre las dos: escrito el 2026-06-26, aceptado el 2
 | [0005](0005-one-platform-realm-and-master-as-operator-realm.md) | Un realm de aplicaciones (`codehunters`) y `master` como realm de operadores | 2026-10-07 | accepted |
 | [0007](0007-one-gateway-per-realm.md) | Un gateway por realm, no un gateway multi-issuer | 2026-10-09 | accepted |
 | [0008](0008-the-edge-keeps-its-own-jwt-plugin.md) | El edge se queda con su propio plugin JWT, no con el validador declarativo | 2026-10-09 | accepted |
+| [0009](0009-staying-on-krakend-2-x.md) | El gateway se queda en KrakenD 2.x mientras CE 3 no cargue plugins | 2026-10-18 | accepted |

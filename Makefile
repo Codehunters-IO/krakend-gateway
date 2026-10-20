@@ -26,7 +26,7 @@ ENDPOINTS_JSON = $(SETTINGS_DIR)/endpoints.json
 # Note: make dev does not regenerate endpoints.json; it uses what's on disk.
 PRODUCTS ?=
 
-.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugin-test-counts plugins-abi jwt-issuer settings-check template-env-check authz-check ports-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
+.PHONY: help check run build generate gen gen-check clean plugin-build plugin-check plugins-test plugin-test-counts plugins-abi krakend-major jwt-issuer settings-check template-env-check authz-check ports-check smoke-headers plugins-loaded up down logs dev builder tls-dev-cert tls-clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -46,6 +46,7 @@ gen-check: ## Fail if endpoints.json is out of sync with endpoints.yaml (refuses
 	@git diff --exit-code $(ENDPOINTS_JSON)
 
 check: gen-check ## Validate KrakenD configuration (regen + drift + config guards + schema)
+	@./scripts/check-krakend-major.sh
 	@./scripts/check-jwt-single-issuer.sh
 	@./scripts/check-settings-orphan-keys.sh
 	@./scripts/check-endpoint-authorization.sh
@@ -112,6 +113,9 @@ plugin-test-counts: ## Fail if README's per-plugin test count drifts from the su
 
 plugins-abi: ## Fail if the plugin builder's Go version drifts from the KrakenD image
 	./scripts/check-plugin-abi.sh $(KRAKEND_IMAGE)
+
+krakend-major: ## Fail if a pinned KrakenD image cannot load plugins (ADR-0009)
+	./scripts/check-krakend-major.sh
 
 jwt-issuer: ## Fail if the edge declares anything other than exactly one issuer
 	./scripts/check-jwt-single-issuer.sh
